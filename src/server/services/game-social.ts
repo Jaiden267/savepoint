@@ -1,14 +1,13 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { ratingToStars, averageRatingToStars } from "@/lib/rating";
+import { hydrateReviews } from "@/server/services/review-hydration";
 import type {
   ReviewCardData,
   ReviewCardAuthor,
 } from "@/components/reviews/review-card";
 import type { LibraryStatus } from "@/lib/validation/library";
 import type { Tables } from "@/types/database";
-
-type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
 export interface DiaryEntrySummary {
   id: string;
@@ -38,15 +37,6 @@ export interface GameSocialData {
   ownReview: OwnReviewSummary | null;
   ratingStats: { averageStars: number | null; ratingCount: number };
   recentReviews: RecentReview[];
-}
-
-function avatarUrl(
-  supabase: SupabaseClient,
-  avatarPath: string | null,
-): string | null {
-  if (!avatarPath) return null;
-  return supabase.storage.from("avatars").getPublicUrl(avatarPath).data
-    .publicUrl;
 }
 
 /**
@@ -168,10 +158,10 @@ export async function getGameSocialData(
     "id" | "user_id" | "rating" | "body" | "has_spoilers" | "created_at"
   >[] = reviewsResult.data ?? [];
 
-  const recentReviews = await hydrateRecentReviews(
+  const recentReviews = await hydrateReviews(
     supabase,
     rawReviews,
-    gameSlug,
+    () => gameSlug,
     viewerId,
   );
 
@@ -182,75 +172,4 @@ export async function getGameSocialData(
     ratingStats,
     recentReviews,
   };
-}
-
-async function hydrateRecentReviews(
-  supabase: SupabaseClient,
-  rawReviews: Pick<
-    Tables<"reviews">,
-    "id" | "user_id" | "rating" | "body" | "has_spoilers" | "created_at"
-  >[],
-  gameSlug: string,
-  viewerId: string | null,
-): Promise<RecentReview[]> {
-  if (rawReviews.length === 0) return [];
-
-  const reviewIds = rawReviews.map((review) => review.id);
-  const authorIds = Array.from(
-    new Set(rawReviews.map((review) => review.user_id)),
-  );
-
-  const [profilesResult, likeCountsResult, viewerLikesResult] =
-    await Promise.all([
-      supabase
-        .from("profiles")
-        .select("id, username, display_name, avatar_path")
-        .in("id", authorIds),
-      supabase
-        .from("review_like_counts")
-        .select("review_id, like_count")
-        .in("review_id", reviewIds),
-      viewerId
-        ? supabase
-            .from("review_likes")
-            .select("review_id")
-            .eq("user_id", viewerId)
-            .in("review_id", reviewIds)
-        : Promise.resolve({ data: [] }),
-    ]);
-
-  const profilesById = new Map(
-    (profilesResult.data ?? []).map((profile) => [profile.id, profile]),
-  );
-  const likeCountByReviewId = new Map(
-    (likeCountsResult.data ?? []).map((row) => [
-      row.review_id,
-      row.like_count ?? 0,
-    ]),
-  );
-  const likedReviewIds = new Set(
-    (viewerLikesResult.data ?? []).map((row) => row.review_id),
-  );
-
-  return rawReviews.map((raw) => {
-    const profile = profilesById.get(raw.user_id);
-    const author: ReviewCardAuthor = {
-      username: profile?.username ?? "unknown",
-      displayName: profile?.display_name ?? null,
-      avatarUrl: avatarUrl(supabase, profile?.avatar_path ?? null),
-    };
-    return {
-      review: {
-        id: raw.id,
-        rating: ratingToStars(raw.rating),
-        body: raw.body,
-        hasSpoilers: raw.has_spoilers,
-        createdAt: raw.created_at,
-        gameSlug,
-      },
-      author,
-      likeCount: likeCountByReviewId.get(raw.id) ?? 0,
-      viewerHasLiked: likedReviewIds.has(raw.id),
-    };
-  });
 }

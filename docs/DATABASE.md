@@ -254,8 +254,27 @@ application query-shaping concern, not a database access-control one.
     adds `profiles.onboarding_completed_at`. Applied, confirmed live.
 18. `20260812100000_add_igdb_game_metadata.sql` (Prompt 3) — adds
     `game_modes`/`themes`/`game_game_modes`/`game_themes` + 7 `games`
-    columns (see [docs/IGDB.md](./IGDB.md#field-mapping)). **Written, not
-    yet applied** — see PROJECT_STATE.md.
+    columns (see [docs/IGDB.md](./IGDB.md#field-mapping)). Applied,
+    confirmed live (see PROJECT_STATE.md's Prompt 3 history).
+19. `20260813090000_add_social_lists_aggregates.sql` (Prompt 5) — additive
+    only, no changes to any existing table/column. Adds two
+    `security_invoker = true` views — `user_rating_distribution(user_id,
+rating, game_count)` (a per-user rating histogram, bounded to ≤10 rows
+    regardless of library size — unlike a per-game histogram, this can
+    never hit PostgREST's default row cap) and `list_public_summary` (`lists.*`
+    plus `item_count`, powering "popular public lists" sorting, since
+    PostgREST can't `order=` on an embedded child aggregate) — plus one
+    `security invoker` function, `reorder_list_items(p_list_id, p_item_ids)`,
+    for atomic ranked-list reordering in a single call (runs as the calling
+    user, so it cannot bypass RLS — every row-level UPDATE inside it is
+    still gated by `list_items`' existing RLS policies). All three objects
+    have explicit `revoke`/`grant` statements (migration 16 hardened default
+    privileges for future objects too, so nothing here could rely on an
+    assumed platform default), plus a `do $$ ... $$` privilege-assertion
+    block inside the migration itself that fails the migration if any grant
+    is wrong. Applied, confirmed live — `npm run verify-schema`'s extended
+    anonymous checks (both views publicly readable, `anon` denied `EXECUTE`
+    on the function) passed.
 
 Each table/reference-table-cluster is created with RLS enabled and **zero**
 policies (files 1–6) before any policy is added (files 11–15) — a table is

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveRoutePolicy, GATED_PATHS } from "./route-policy";
+import { resolveRoutePolicy, isGatedPath } from "./route-policy";
 
 describe("resolveRoutePolicy", () => {
   describe("unauthenticated", () => {
@@ -155,8 +155,8 @@ describe("resolveRoutePolicy", () => {
     });
   });
 
-  describe("GATED_PATHS — the single source of truth session.ts relies on", () => {
-    it("includes every path a redirect decision can depend on isAuthenticated/onboardingCompleted/username for", () => {
+  describe("isGatedPath() — the single source of truth session.ts relies on", () => {
+    it("includes every exact path a redirect decision can depend on isAuthenticated/onboardingCompleted/username for", () => {
       for (const pathname of [
         "/login",
         "/signup",
@@ -166,8 +166,130 @@ describe("resolveRoutePolicy", () => {
         "/reset-password",
         "/library",
         "/diary",
+        "/home",
+        "/lists/new",
       ]) {
-        expect(GATED_PATHS.has(pathname)).toBe(true);
+        expect(isGatedPath(pathname)).toBe(true);
+      }
+    });
+
+    it("includes the pattern-matched /lists/[id]/edit route", () => {
+      expect(isGatedPath("/lists/abc123/edit")).toBe(true);
+      expect(
+        isGatedPath("/lists/4dd1ceb8-3446-4167-a4b7-174a8e9e0a58/edit"),
+      ).toBe(true);
+    });
+
+    it("excludes ungated paths, including near-misses of the edit pattern", () => {
+      for (const pathname of [
+        "/",
+        "/users/alice",
+        "/lists/abc123",
+        "/lists/abc/edit/x",
+        "/lists/abc/x/edit",
+        "/lists",
+        "/games/some-slug",
+      ]) {
+        expect(isGatedPath(pathname)).toBe(false);
+      }
+    });
+  });
+
+  describe("/home and /lists/new — auth + completed profile required", () => {
+    it("redirects unauthenticated visitors to /login with a next param", () => {
+      for (const pathname of ["/home", "/lists/new"]) {
+        expect(
+          resolveRoutePolicy({
+            pathname,
+            isAuthenticated: false,
+            onboardingCompleted: false,
+          }),
+        ).toEqual({
+          action: "redirect",
+          destination: "/login",
+          query: { next: pathname },
+        });
+      }
+    });
+
+    it("redirects authenticated-but-incomplete-profile visitors to /onboarding", () => {
+      for (const pathname of ["/home", "/lists/new"]) {
+        expect(
+          resolveRoutePolicy({
+            pathname,
+            isAuthenticated: true,
+            onboardingCompleted: false,
+          }),
+        ).toEqual({ action: "redirect", destination: "/onboarding" });
+      }
+    });
+
+    it("allows authenticated visitors with a completed profile", () => {
+      for (const pathname of ["/home", "/lists/new"]) {
+        expect(
+          resolveRoutePolicy({
+            pathname,
+            isAuthenticated: true,
+            onboardingCompleted: true,
+            username: "alice",
+          }),
+        ).toEqual({ action: "allow" });
+      }
+    });
+  });
+
+  describe("/lists/[id]/edit — pattern-matched auth + completed profile required", () => {
+    const editPath = "/lists/4dd1ceb8-3446-4167-a4b7-174a8e9e0a58/edit";
+
+    it("redirects unauthenticated visitors to /login with a next param", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: editPath,
+          isAuthenticated: false,
+          onboardingCompleted: false,
+        }),
+      ).toEqual({
+        action: "redirect",
+        destination: "/login",
+        query: { next: editPath },
+      });
+    });
+
+    it("redirects authenticated-but-incomplete-profile visitors to /onboarding", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: editPath,
+          isAuthenticated: true,
+          onboardingCompleted: false,
+        }),
+      ).toEqual({ action: "redirect", destination: "/onboarding" });
+    });
+
+    it("allows authenticated visitors with a completed profile", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: editPath,
+          isAuthenticated: true,
+          onboardingCompleted: true,
+          username: "alice",
+        }),
+      ).toEqual({ action: "allow" });
+    });
+
+    it("never gates /lists/[id] (view) or /users/[username]/* — visibility is per-resource, not a route-level wall", () => {
+      for (const pathname of [
+        "/lists/4dd1ceb8-3446-4167-a4b7-174a8e9e0a58",
+        "/users/alice",
+        "/users/alice/lists",
+        "/users/alice/followers",
+      ]) {
+        expect(
+          resolveRoutePolicy({
+            pathname,
+            isAuthenticated: false,
+            onboardingCompleted: false,
+          }),
+        ).toEqual({ action: "allow" });
       }
     });
   });

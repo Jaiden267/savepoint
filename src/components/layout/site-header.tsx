@@ -34,9 +34,15 @@ export async function SiteHeader() {
           <LinkButton variant="ghost" size="sm" href="/discover">
             Discover
           </LinkButton>
+          <LinkButton variant="ghost" size="sm" href="/discover/community">
+            Community
+          </LinkButton>
           <SearchCommandDialog />
           {user && username ? (
             <>
+              <LinkButton variant="ghost" size="sm" href="/home">
+                Home
+              </LinkButton>
               <LinkButton variant="ghost" size="sm" href="/library">
                 Library
               </LinkButton>

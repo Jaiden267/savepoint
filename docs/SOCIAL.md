@@ -1,4 +1,11 @@
-# Core tracking: library, diary, reviews, likes, comments
+# Core tracking, lists, social, discovery
+
+Covers both Prompt 4 (library/diary/reviews/likes/comments, below) and
+Prompt 5 (lists, follows, activity feed, complete profiles, discovery — see
+["Prompt 5 — Lists, social & discovery"](#prompt-5--lists-social--discovery)
+near the end of this file).
+
+## Prompt 4: library, diary, reviews, likes, comments
 
 Prompt 4: `user_games` status + rating, a diary, spoiler-aware reviews, and
 the like/comment layer on top of reviews. Read this alongside
@@ -207,3 +214,233 @@ Prompt 4's manual verification is complete.
     originally requested page.
 21. A user with an incomplete profile (mid-onboarding) tries `/library`/
     `/diary` → redirected to `/onboarding`.
+
+---
+
+## Prompt 5 — Lists, social & discovery
+
+Lists (CRUD, public/unlisted/private visibility, ranked/unranked, reordering,
+per-item notes), follows, an `activity_events` home feed, complete profile
+pages, and discovery (user search, popular public lists, recent public
+reviews). Combines what the original roadmap sketched as two separate
+milestones — "Graph & feed" and "Lists" — into one; see
+[ROADMAP.md](./ROADMAP.md).
+
+The schema for `lists`/`list_items`/`follows`/`activity_events` (tables,
+RLS, and the `fn_log_list_activity()`/`fn_log_follow_activity()` triggers)
+has been live since Prompt 1 — confirmed by reading the applied migration
+SQL directly. Only one new migration was needed:
+[migration 19](./DATABASE.md#migration-files-applied-in-order) — two
+`security_invoker` views and one `security invoker` reorder function. See
+DATABASE.md for its full detail.
+
+### Architecture
+
+Same conventions as Prompt 4 throughout: Server Actions
+(`src/server/actions/{lists,follows}.ts`) re-check auth, `Zod.safeParse`
+before any database call, mutate via the session client (never `admin.ts`,
+except `addListItemAction`'s use of the existing `importGameByIgdbId()` for
+an uncached IGDB game — the same non-normal-CRUD admin-client use already
+established in Prompt 3), map Postgres errors to friendly messages,
+`revalidatePath`. Read services
+(`src/server/services/{lists,follows,activity-feed,discovery,profile}.ts`)
+take a nullable `viewerId` passed in by the caller — never derived inside
+the service — and use the ordinary session client throughout, since every
+public surface here (`/users/[username]`, `/lists/[id]` for public/unlisted)
+must render fully for a signed-out visitor.
+
+**`viewerId` is not a security boundary inside these services** — RLS on
+the request-scoped session client is the actual gate, automatically scoped
+to whichever real session (or none) the request carries. `viewerId` is only
+used to decide view-model details (an `isOwner` flag, whether to apply an
+extra application-level visibility narrowing — see next section, or which
+viewer-scoped queries to even run).
+
+### Visibility: RLS plus one application-level narrowing
+
+`lists` RLS already fully gates `private` (owner-only) — a non-owner's
+request for a private list returns no row, full stop, and every read
+service here treats that as not-found, never as an error. `unlisted` is
+different: it's RLS-_readable_ by anyone with the id/link (the documented
+"reachable but not discoverable" design from Prompt 1), so every
+browse/discovery-style query in this prompt adds an explicit
+`.eq("visibility", "public")` on top of RLS to exclude it:
+`getPopularPublicLists`, and `getProfileLists` for any viewer other than the
+list owner (a profile's own Lists tab is a browsable index too, not a
+direct link — an unlisted list stays reachable at `/lists/[id]` for anyone,
+but does not appear there for a non-owner visitor).
+
+### The `reorder_list_items` database function
+
+Ranked-list reordering ships as accessible up/down/top/bottom controls only
+— no drag-and-drop this prompt (explicit product decision). The reorder
+itself is one atomic call to `reorder_list_items(p_list_id, p_item_ids)`
+(migration 19), not a sequence of separate PostgREST update calls: a naive
+sequence would transiently collide with `list_items`' own
+`unique(list_id, position) deferrable initially deferred` constraint (e.g.
+swapping positions 1 and 2 directly conflicts), since that constraint's
+deferrability only helps _within one transaction_ — which a single function
+call gets for free and a sequence of separate HTTP requests does not. The
+function is `security invoker`, not `definer` — it runs as the calling
+user, so every UPDATE inside it is still gated by `list_items`' existing
+RLS; it re-validates ownership and that the submitted id array is exactly
+the list's current item set before touching anything. This is not a
+reversal of Prompt 4's "no RPC" decision (which was specifically about
+avoiding a `security definer` bypass for a different problem) — this
+function bypasses nothing.
+
+### Activity feed: cursor pagination and current-visibility re-checking
+
+**Cursor.** Keyset on `(created_at desc, id desc)` — a live-inserting feed
+under offset pagination would skip or duplicate rows across pages, so this
+deliberately deviates from the offset convention used everywhere else in
+this codebase (library/diary/discover). The cursor is an opaque base64
+string encoding `{t: created_at, i: id}` of the last _raw_ fetched row (see
+below for why "raw," not "last rendered"); a malformed or tampered cursor
+decodes to `null` and the feed silently resets to page 1 rather than
+erroring.
+
+**Re-checking visibility.** An `activity_events` row being safe to log at
+INSERT time (`fn_log_list_activity()` already skips private lists) does
+**not** mean it's still safe to _surface_ later — a list can go
+private/unlisted after creation, or any referenced row can be deleted
+outright, and stale metadata/links must never be shown. `getHomeFeed` never
+renders directly from a raw `activity_events` row: it batch-fetches the
+_current_ state of every referenced object (grouped by `object_type`, one
+query per type present on the page — bounded ≤5, not per-row) through the
+same RLS-scoped session client, and drops any event whose object is now
+missing or (for `list_created` specifically) whose list is no longer
+`public`. The next-page cursor is derived from the last row of the _raw_
+fetched page, not the last _surviving_ (rendered) one — so a page can
+legitimately render fewer cards than its page size without ever skipping or
+duplicating an event on the next page. See
+`src/server/services/activity-feed.test.ts` for the suppression and cursor
+round-trip cases.
+
+**Metadata already available**, used to avoid extra queries once an event
+survives the visibility re-check:
+
+| `event_type`         | `object_type` | `metadata` fields        | Extra fetch beyond the re-check?                                                                         |
+| -------------------- | ------------- | ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `review_published`   | `review`      | `{rating, has_spoilers}` | Yes — body isn't in metadata; the existence-check batch is extended to also select `body` for a snippet. |
+| `game_rated`         | `user_game`   | `{rating}`               | No.                                                                                                      |
+| `game_completed`     | `user_game`   | `{}`                     | No (game name comes from `activity_events.game_id`).                                                     |
+| `diary_entry_logged` | `diary_entry` | `{played_on, is_replay}` | No.                                                                                                      |
+| `list_created`       | `list`        | `{title, is_ranked}`     | No, beyond the visibility re-check itself.                                                               |
+| `follow_created`     | `follow`      | `{following_id}`         | Batch the followed user's profile.                                                                       |
+
+### Add-game-to-list flow
+
+`AddGameToListDialog` reuses the existing `/api/search` endpoint (not
+duplicated) for the search UX, but calls `addListItemAction(listId, igdbId)`
+on selection instead of navigating. The action imports the game via the
+existing `importGameByIgdbId()` (idempotent — a fresh local row
+short-circuits with no IGDB call) before inserting the `list_items` row at
+the current max position + 1 (never client-supplied). A dedicated rate-limit
+bucket, `list-item-import:${user.id}` at 20/hour (same shape as
+`review-create`'s), gates this independently of `/games/[slug]`'s own
+import gate, since it's a second path that can trigger an IGDB call.
+
+### Route structure
+
+`/users/[username]` is real nested routes, not a client-side tab switch (no
+such pattern exists elsewhere in this codebase, and "proper not-found and
+loading states" per tab favors real routes): a segment `layout.tsx` fetches
+the profile + `profile_stats` + the viewer's follow state once and renders
+the shared header/nav; `page.tsx` (overview: recently played, favourites,
+ratings distribution), `library/`, `diary/`, `reviews/`, `lists/`,
+`followers/`, `following/` each own their own paginated fetch and
+`loading.tsx`. `library`/`diary`/`reviews`/`lists` tabs are read-only even
+for the profile's own owner — editing happens on the existing dedicated
+`/library`/`/diary` pages and the new `/lists/[id]/edit`, not inline on a
+page that's otherwise a public, browsable surface.
+
+`/lists/new`, `/lists/[id]` (detail, public per its own visibility),
+`/lists/[id]/edit` (owner-only — a non-owner or a missing list both 404,
+indistinguishably, never confirming that a private list with that id
+exists). `/home` (the feed) and `/discover/community` (kept separate from
+Prompt 3's existing `/discover` game-catalogue page, to avoid touching
+already-tested code) round out the new routes.
+
+### `route-policy.ts`: pattern-matched gating
+
+`/home` and `/lists/new` are exact-match gated entries, same as before.
+`/lists/[id]/edit` is dynamic, so `route-policy.ts` adds a single
+segment-aware regex, `/^\/lists\/[^/]+\/edit$/` — it matches exactly one
+path segment between `/lists/` and `/edit` (not `/lists/x/y/edit`,
+`/lists/x/edit/y`, or anything deeper). `isGatedPath()` is now the single
+exported source of truth (replacing the old exported `GATED_PATHS` Set) —
+it covers both the exact-match Sets and the pattern — and
+`src/lib/supabase/session.ts` calls it directly rather than touching a raw
+Set. This generalizes the fix for the exact class of bug Prompt 4 already
+hit once (`/diary` silently skipping the profile lookup because a path was
+gated in one file but not the other) to pattern-matched paths too.
+`/lists/[id]` (view) and `/users/[username]/*` stay ungated at the route
+level — visibility is per-resource via RLS/in-page checks, not a blanket
+auth wall, since signed-out visitors must be able to load them.
+
+### No client-forged activity events
+
+Unchanged from Prompt 1: `activity_events` has zero INSERT/UPDATE/DELETE
+grant for `anon`/`authenticated` — every row is written exclusively by the
+`SECURITY DEFINER` trigger functions. No code added in this prompt attempts
+to insert into `activity_events` directly, and none could succeed if it
+tried.
+
+### Manual two-user + one-private-list checklist
+
+**Run in full by the user against the live app — every item below passed,
+no regressions found.** Not run by Claude against live Supabase — this is a
+live-browser manual check, same discipline as Prompt 4's checklist above.
+No browser console or standalone-server terminal errors were observed
+during the run. The one path deliberately verified a different way rather
+than manually: an authenticated non-owner's runtime rejection from the
+`reorder_list_items` database function was confirmed via the migration's
+own `has_table_privilege`/`has_function_privilege` assertions and the
+mocked unit tests in `src/server/actions/lists.test.ts`, not by handling
+raw auth tokens in DevTools.
+
+1. User A creates a **private** ranked list with 3 games, one with a note.
+   Signed out in a second browser/incognito window, visit
+   `/lists/{A's list id}` directly → 404 ("List not found"), not an error
+   page, not a partial render.
+2. Signed in as User B, visit the same URL → also 404. User B visits User
+   A's profile (`/users/{A}/lists`) → the private list is not listed.
+3. User A changes the list to **unlisted** → User B visiting the direct
+   `/lists/{id}` URL now sees it fully (items, notes). User B visits
+   `/users/{A}/lists` again → still not listed. User B visits
+   `/discover/community`'s "Popular public lists" → not listed there either.
+4. User A changes the list to **public** → now appears on both
+   `/users/{A}/lists` (viewed by User B) and `/discover/community`.
+5. User A reorders the 3 items using only the up/down/top/bottom buttons
+   (keyboard-only pass: Tab to each control, Enter/Space to activate) →
+   order persists after a full page reload.
+6. User A removes one game, adds a different one via the search dialog
+   (including one not previously imported — confirms the IGDB import path
+   works) → both changes persist after reload.
+7. User A deletes the list → redirected to their own Lists tab; the list
+   id now 404s for everyone, including User A.
+8. User B follows User A (`FollowButton` on User A's profile) → follower
+   count increments immediately (optimistic), persists after reload. User B
+   double-clicks rapidly (race simulation) → no error, final state is a
+   single follow, no duplicate row.
+9. User B unfollows → count decrements, persists after reload.
+10. User A creates a **second** list, this one public, and writes a review
+    and logs a diary entry for some game, all while User B still follows
+    User A (re-follow from step 9 if needed) → User B's `/home` feed shows
+    the new list, the review, and the diary entry, each linking correctly.
+11. User A changes that second list's visibility to **private** → on User
+    B's next `/home` page load (or "Load more"), the `list_created` feed
+    item for it is gone. The review/diary items are unaffected (reviews and
+    diary entries have no visibility tiers).
+12. User A deletes their review from step 10 → User B's feed no longer
+    shows that `review_published` item on next load; `/reviews/[id]` for it
+    404s.
+13. Signed-out visitor loads `/users/{A}`, `/users/{B}`, and any of the
+    public lists above → every page renders fully (avatar, bio, stats,
+    tabs, list contents), with "Sign in to follow" in place of a follow
+    button and no like/edit controls anywhere they'd require a session.
+14. Unauthenticated visitor hits `/home` or `/lists/new` directly →
+    redirected to `/login?next=...`; after signing in, lands back on the
+    originally requested page. A signed-in user with an incomplete profile
+    (mid-onboarding) hits the same two routes → redirected to `/onboarding`.

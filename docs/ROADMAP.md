@@ -22,9 +22,24 @@ fixed — do not renumber later stages when adding work to an earlier one.
       [SOCIAL.md](./SOCIAL.md) — automated checks pass and the full manual
       two-user browser checklist has been run to completion, every item
       passed. Complete.
-- [ ] **Prompt 5 — Graph & feed**: follows, `activity_events` feed, profile
-      pages + stats.
-- [ ] **Prompt 6 — Lists**: ranked/unranked lists + items.
+- [x] **Prompt 5 — Lists, social & profiles**: this project's actual Prompt 5
+      task combined the originally-separate "Graph & feed" and "Lists"
+      milestones into one — ranked/unranked lists with visibility
+      enforcement, follows, the `activity_events` feed, complete profile
+      pages + stats, and discovery (user search, popular public lists,
+      recent public reviews). Migration 19 (`user_rating_distribution`,
+      `list_public_summary`, `reorder_list_items`) is applied and confirmed
+      live; all application code passed every automated check
+      (lint/typecheck/**371/371** tests/format/build); the user has
+      personally run the full live two-user/one-private-list manual
+      checklist — every item passed, no regressions found. See
+      [SOCIAL.md](./SOCIAL.md#manual-two-user--one-private-list-checklist)
+      and [PROJECT_STATE.md](./PROJECT_STATE.md). Complete.
+- [ ] **Prompt 6 — Lists**: merged into Prompt 5 above — there is no
+      separate Lists-only milestone in this project's actual prompt
+      sequence. Left as a placeholder line rather than deleted, so this
+      document's history stays honest about the renumbering-avoidance rule
+      above; Prompts 7 and 8 keep their original numbers.
 - [ ] **Prompt 7 — Pinecone**: index bootstrap (`llama-text-embed-v2`,
       namespace `games`), on-demand upsert via `game_vector_sync`, semantic
       search, recommendations + reasons, `recommendation_feedback`. Replaces

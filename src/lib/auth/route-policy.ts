@@ -32,6 +32,8 @@ const REQUIRES_AUTH_PATHS = new Set([
   "/reset-password",
   "/library",
   "/diary",
+  "/home",
+  "/lists/new",
 ]);
 
 /** Subset of REQUIRES_AUTH_PATHS that additionally require onboarding to be done. */
@@ -39,23 +41,43 @@ const REQUIRES_COMPLETED_PROFILE_PATHS = new Set([
   "/settings/profile",
   "/library",
   "/diary",
+  "/home",
+  "/lists/new",
 ]);
 
 /**
- * Every path whose decision can depend on isAuthenticated/onboardingCompleted/
- * username — i.e. every path resolveRoutePolicy actually reads those fields
- * for. The single source of truth for which paths need the extra profile
- * lookup: src/lib/supabase/session.ts imports this instead of maintaining
- * its own separate list, specifically so a path added to REQUIRES_AUTH_PATHS
- * here can never again silently fall out of sync with what the proxy
- * actually fetches (that drift is exactly what caused /diary to resolve
- * with a stale onboardingCompleted=false and redirect through /onboarding
- * to the wrong destination — see route-policy.test.ts's regression test).
+ * Matches exactly `/lists/<one segment>/edit` — e.g. `/lists/abc123/edit` —
+ * and nothing deeper or shallower (`/lists/abc/edit/x`,
+ * `/lists/abc/x/edit`, bare `/lists/abc` all fail to match). `/lists/[id]`
+ * is a dynamic route, so it can't be listed in the exact-match Sets above;
+ * this is the "switch to prefix matching" this file's own comment
+ * anticipated once a nested protected route showed up.
  */
-export const GATED_PATHS = new Set([
-  ...AUTH_ONLY_PATHS,
-  ...REQUIRES_AUTH_PATHS,
-]);
+const LIST_EDIT_PATTERN = /^\/lists\/[^/]+\/edit$/;
+
+function isListEditPath(pathname: string): boolean {
+  return LIST_EDIT_PATTERN.test(pathname);
+}
+
+/**
+ * The single source of truth for "does this path need the extra
+ * auth/profile decision logic at all" — covers both the exact-match Sets
+ * above and the pattern-matched routes. `src/lib/supabase/session.ts` calls
+ * this (never a raw `GATED_PATHS.has()`) so a path added here, whether
+ * exact or pattern-matched, can never again silently fall out of sync with
+ * what the proxy actually fetches a profile for — that exact class of drift
+ * (a path gated in one file but not the other) is what caused `/diary` to
+ * resolve with a stale `onboardingCompleted=false` and redirect through
+ * `/onboarding` to the wrong destination — see route-policy.test.ts's
+ * regression test.
+ */
+export function isGatedPath(pathname: string): boolean {
+  return (
+    AUTH_ONLY_PATHS.has(pathname) ||
+    REQUIRES_AUTH_PATHS.has(pathname) ||
+    isListEditPath(pathname)
+  );
+}
 
 function profileDestination(username?: string | null): string {
   return username ? `/users/${username}` : "/";
@@ -68,7 +90,10 @@ export function resolveRoutePolicy(input: RoutePolicyInput): RoutePolicyResult {
     return { action: "redirect", destination: profileDestination(username) };
   }
 
-  if (REQUIRES_AUTH_PATHS.has(pathname)) {
+  const requiresAuth =
+    REQUIRES_AUTH_PATHS.has(pathname) || isListEditPath(pathname);
+
+  if (requiresAuth) {
     if (!isAuthenticated) {
       // /reset-password is reached via a recovery-link session, not a
       // normal sign-in — send an unauthenticated visitor to start the
@@ -90,10 +115,11 @@ export function resolveRoutePolicy(input: RoutePolicyInput): RoutePolicyResult {
         : { action: "allow" };
     }
 
-    if (
-      REQUIRES_COMPLETED_PROFILE_PATHS.has(pathname) &&
-      !onboardingCompleted
-    ) {
+    const requiresCompletedProfile =
+      REQUIRES_COMPLETED_PROFILE_PATHS.has(pathname) ||
+      isListEditPath(pathname);
+
+    if (requiresCompletedProfile && !onboardingCompleted) {
       return { action: "redirect", destination: "/onboarding" };
     }
   }

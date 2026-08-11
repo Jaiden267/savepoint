@@ -1,33 +1,3 @@
-/**
- * GENERATED — via `supabase gen types typescript --linked`, against the live
- * project after all 18 migrations were confirmed applied (local/remote
- * migration history verified matching via `supabase migration list`).
- *
- * Migration 18 (`20260812100000_add_igdb_game_metadata.sql`, Prompt 3) added
- * `game_modes`, `themes`, `game_game_modes`, `game_themes` and 7 columns on
- * `games` (`igdb_game_type_id`, `igdb_game_type`, `version_parent_igdb_id`,
- * `keywords`, `developer_names`, `publisher_names`, `websites`). Those were
- * hand-patched into this file ahead of the migration being live so the app
- * could typecheck; once the user confirmed migration 18 applied, this file
- * was regenerated for real and diffed against the hand-patch first —
- * **byte-identical**, confirming the earlier patch was accurate. No manual
- * patch remains — this is a plain, unmodified `supabase gen types` output.
- *
- * Regenerate the same way after any future migration:
- *   supabase gen types typescript --linked > src/types/database.ts
- * (or `--local` after `supabase start` + `supabase migration up`, if
- * developing against a local Postgres instance).
- *
- * Note: columns backed by a `text ... check (col in (...))` constraint
- * (`user_games.status`, `lists.visibility`, `activity_events.event_type`/
- * `object_type`, `recommendation_feedback.event_type`,
- * `game_vector_sync.status`) come back here as plain `string`, not a
- * literal union — Postgres/PostgREST only expose a narrower type for a real
- * `CREATE TYPE ... AS ENUM`, which this schema deliberately doesn't use (see
- * docs/DATABASE.md). Validate the actual allowed values with a Zod schema at
- * the application boundary, not by relying on this file.
- */
-
 export type Json =
   | string
   | number
@@ -490,6 +460,13 @@ export type Database = {
             foreignKeyName: "list_items_list_id_fkey";
             columns: ["list_id"];
             isOneToOne: false;
+            referencedRelation: "list_public_summary";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "list_items_list_id_fkey";
+            columns: ["list_id"];
+            isOneToOne: false;
             referencedRelation: "lists";
             referencedColumns: ["id"];
           },
@@ -787,6 +764,20 @@ export type Database = {
           },
         ];
       };
+      list_public_summary: {
+        Row: {
+          created_at: string | null;
+          description: string | null;
+          id: string | null;
+          is_ranked: boolean | null;
+          item_count: number | null;
+          title: string | null;
+          updated_at: string | null;
+          user_id: string | null;
+          visibility: string | null;
+        };
+        Relationships: [];
+      };
       profile_stats: {
         Row: {
           follower_count: number | null;
@@ -813,9 +804,20 @@ export type Database = {
           },
         ];
       };
+      user_rating_distribution: {
+        Row: {
+          game_count: number | null;
+          rating: number | null;
+          user_id: string | null;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
-      [_ in never]: never;
+      reorder_list_items: {
+        Args: { p_item_ids: string[]; p_list_id: string };
+        Returns: undefined;
+      };
     };
     Enums: {
       [_ in never]: never;

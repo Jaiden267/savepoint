@@ -1,12 +1,17 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { ratingToStars } from "@/lib/rating";
+import { avatarUrl } from "@/server/services/avatar";
+import {
+  hydrateReviews,
+  type HydratedReview,
+} from "@/server/services/review-hydration";
 import type {
   ReviewCardData,
   ReviewCardAuthor,
 } from "@/components/reviews/review-card";
 
-type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
+const DEFAULT_PAGE_SIZE = 24;
 
 export interface ReviewCommentDetail {
   id: string;
@@ -23,15 +28,6 @@ export interface ReviewDetail {
   viewerHasLiked: boolean;
   isOwnReview: boolean;
   comments: ReviewCommentDetail[];
-}
-
-function avatarUrl(
-  supabase: SupabaseClient,
-  avatarPath: string | null,
-): string | null {
-  if (!avatarPath) return null;
-  return supabase.storage.from("avatars").getPublicUrl(avatarPath).data
-    .publicUrl;
 }
 
 /**
@@ -147,4 +143,63 @@ export async function getReviewDetail(
     isOwnReview: viewerId != null && reviewRow.user_id === viewerId,
     comments,
   };
+}
+
+export interface UserReviewsPage {
+  reviews: HydratedReview[];
+  hasMore: boolean;
+}
+
+/**
+ * A profile's Reviews tab — `userId` is the profile being viewed, not
+ * necessarily the caller; reviews are public per RLS, so this renders fully
+ * for a signed-out visitor too. `viewerId` (optional, separate from
+ * `userId`) is only used to resolve the *viewer's* own like state on each
+ * card, same as getReviewDetail above.
+ */
+export async function listUserReviews({
+  userId,
+  viewerId = null,
+  page,
+  pageSize = DEFAULT_PAGE_SIZE,
+}: {
+  userId: string;
+  viewerId?: string | null;
+  page: number;
+  pageSize?: number;
+}): Promise<UserReviewsPage> {
+  const supabase = await createClient();
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize; // fetch one extra row to know if there's a next page
+
+  const { data, error } = await supabase
+    .from("reviews")
+    .select("id, user_id, game_id, rating, body, has_spoilers, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error || !data) return { reviews: [], hasMore: false };
+
+  const hasMore = data.length > pageSize;
+  const rows = data.slice(0, pageSize);
+
+  const gameIds = Array.from(new Set(rows.map((row) => row.game_id)));
+  const { data: games } =
+    gameIds.length > 0
+      ? await supabase.from("games").select("id, slug").in("id", gameIds)
+      : { data: [] };
+  const slugByGameId = new Map((games ?? []).map((g) => [g.id, g.slug]));
+  const slugByReviewId = new Map(
+    rows.map((row) => [row.id, slugByGameId.get(row.game_id) ?? ""]),
+  );
+
+  const reviews = await hydrateReviews(
+    supabase,
+    rows,
+    (row) => slugByReviewId.get(row.id) ?? "",
+    viewerId,
+  );
+
+  return { reviews, hasMore };
 }

@@ -3,15 +3,176 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-12 (Prompt 4 — core tracking: library, ratings,
-diary, spoiler-aware reviews, likes/comments — **complete and fully
-manually verified.** No new migration needed. Two regressions surfaced by
-initial manual browser testing were found, fixed, and manually confirmed
-fixed — see "Regressions found during manual testing and fixed" below.
-The full manual two-user browser checklist in
-[docs/SOCIAL.md](./SOCIAL.md) **has now been run in full — every item
-passed** — and the `/library` real-data spot-check also passed. Prompt 4
-is closed; see "Next up" below.)._
+_Last updated: 2026-08-13 (Prompt 5 — lists, social & profiles — **complete
+and fully manually verified.** Migration 19 is applied and confirmed live;
+all Phase B application code (validation, services, actions, components,
+routes, tests, docs) is written, every automated check
+(lint/typecheck/test/format/build) is clean, and the user has personally
+run the full live two-user/one-private-list manual checklist —
+**every item passed, no regressions found.** See "Prompt 5 — Phase A",
+"Prompt 5 — Phase B", and "Prompt 5 — manual verification" below for the
+full history. Prompt 4 — core tracking — remains **complete and fully
+manually verified**; its own history is preserved below unchanged.)._
+
+## Prompt 5 — Phase A (this pass)
+
+Prompt 5 combines what the original roadmap sketched as two separate
+milestones ("Graph & feed" and "Lists") into one task: lists (CRUD, public/
+unlisted/private visibility, ranked/unranked, reordering, per-item notes),
+follows, an `activity_events` home feed, complete profile pages, and
+discovery (user search, popular public lists, recent public reviews). See
+[ROADMAP.md](./ROADMAP.md) for the renumbering note.
+
+The schema for lists/follows/activity plumbing has been fully live since
+Prompt 1 (`lists`, `list_items`, `follows`, `activity_events`, their RLS,
+and the `fn_log_list_activity()`/`fn_log_follow_activity()` triggers) —
+confirmed by reading the applied migration SQL directly, not assumed from
+docs. Two genuine gaps needed one new, additive migration, split into two
+hard-separated phases because the application code depends on database
+objects that don't exist in `src/types/database.ts` until the migration is
+both applied live **and** regenerated:
+
+- **Phase A (this pass, complete)**: wrote
+  `supabase/migrations/20260813090000_add_social_lists_aggregates.sql` —
+  two `security_invoker = true` views
+  (`user_rating_distribution`, a bounded ≤10-row-per-user rating histogram
+  for the profile page; `list_public_summary`, `lists.*` plus `item_count`
+  so "popular public lists" can sort by it, since PostgREST can't `order=`
+  on an embedded child aggregate) and one `security invoker` function
+  (`reorder_list_items(p_list_id, p_item_ids)` — atomic ranked-list
+  reordering in one transaction, using exactly the same-transaction
+  deferred-constraint behavior `list_items`'s existing
+  `unique(list_id, position) deferrable initially deferred` was built for;
+  runs as the calling user, so it cannot bypass RLS — not a reversal of
+  Prompt 4's "no RPC" decision, which was specifically about avoiding a
+  `security definer` bypass for a different problem). All three objects
+  have explicit `revoke`/`grant` statements (migration 16 hardened default
+  privileges for future objects too, so nothing here can rely on an assumed
+  platform default), plus a `do $$ ... $$` block inside the migration itself
+  that asserts those grants via `has_table_privilege`/
+  `has_function_privilege` and fails the migration if any are wrong, rather
+  than applying silently-incorrect privileges.
+
+  `scripts/verify-schema.mts` (anonymous/publishable-key-only, unchanged in
+  every other respect) was extended with: both new views added to the
+  existing public-read check list, and a new anon-EXECUTE-denied check for
+  `reorder_list_items`. This script can only ever speak to what the `anon`
+  role can do — it has no way to obtain a real authenticated session, so the
+  authenticated-non-owner runtime case (a signed-in User B calling
+  `reorder_list_items` against a list they don't own) is **not** covered
+  here; it's deferred to Phase B's real two-user manual checklist, where an
+  actual second authenticated session exists. The static
+  authenticated-role grants (SELECT on both views, EXECUTE on the function)
+  are covered by the migration's own privilege-assertion block, not by this
+  script.
+
+  `npm run lint` (0 errors, the same 4 pre-existing style warnings from
+  before this pass), `npm run typecheck` (clean — the one `as never` pair in
+  the new RPC-denial check is the same narrow, call-site-scoped pattern
+  already used throughout `verify-schema.mts` for values not yet in the
+  generated type, not a general bypass; it's expected to stay harmless, not
+  necessarily be removed, once Phase B regenerates types), and `npm test`
+  (**292/292**, unchanged — nothing in Phase A added or touched a test)
+  were all re-run clean after these changes.
+
+  **Not committed, not pushed** — this migration is written but not yet
+  applied to the live Supabase project.
+
+- **Phase B (this pass, implementation complete)**: the user applied
+  migration 19 via the Supabase CLI (confirmed in both local and remote
+  migration history, `npm run verify-schema` passed including the new
+  anonymous checks, no migration repair used). `src/types/database.ts` was
+  regenerated for real (`supabase gen types typescript --linked`) and
+  diffed against the pre-regeneration file first: the diff contained
+  **exactly** the expected additions — `Views.user_rating_distribution`,
+  `Views.list_public_summary`, `Functions.reorder_list_items`, plus one
+  harmless extra `list_items → list_public_summary` relationship entry
+  (Supabase's relationship inference picking up the view's own `id`
+  column) — every one of the 21 pre-existing tables was byte-identical in
+  content (only CLI-vs-Prettier formatting differed). No unexpected
+  removals or unrelated schema changes. All Prompt 5 application code was
+  then implemented against these real generated types — no `as any`, no
+  untyped Supabase client casts, no hand-written type patches.
+
+  **What was built**: `src/lib/validation/{lists,follows}.ts` +
+  `common.ts`'s new `cursorSchema`; read services
+  `src/server/services/{avatar,review-hydration,lists,follows,activity-feed,
+discovery,profile}.ts` (`avatar.ts`/`review-hydration.ts` hoisted out of
+  duplicated logic in `game-social.ts`/`reviews.ts`, which were refactored
+  to use them; `reviews.ts` also gained `listUserReviews` for the profile
+  Reviews tab); Server Actions `src/server/actions/{lists,follows}.ts`
+  (`reorderListItemsAction` calls the new `reorder_list_items` RPC in one
+  atomic round trip; `addListItemAction` imports via the existing
+  `importGameByIgdbId()` with its own rate-limit bucket;
+  `toggleFollowAction` mirrors `toggleReviewLikeAction`'s idempotent-toggle
+  template); `src/lib/auth/route-policy.ts` gained `isGatedPath()` (replacing
+  the old exported `GATED_PATHS` Set) plus a segment-aware
+  `/^\/lists\/[^/]+\/edit$/` pattern matcher, with `session.ts` switched
+  over to it — the single-source-of-truth fix from Prompt 4's `/diary`
+  regression, generalized to pattern-matched paths; new components under
+  `src/components/{lists,social,profile,activity}/`; new routes
+  `/home`, `/discover/community`, `/lists/new`, `/lists/[id]`,
+  `/lists/[id]/edit`, and a full nested-route rebuild of
+  `/users/[username]` (`layout.tsx` + `page.tsx` + `library/`, `diary/`,
+  `reviews/`, `lists/`, `followers/`, `following/`, each with its own
+  `loading.tsx`, plus one `not-found.tsx`) — replacing the old single-page
+  Prompt 2 version. `site-header.tsx` gained Home/Community nav links.
+
+  **Design decisions carried through from the plan, confirmed in the real
+  code**: the activity feed re-checks every event's _current_ object
+  visibility at read time through the ordinary RLS-scoped session client
+  (never `admin.ts`) before rendering — a list gone private/unlisted, or
+  any deleted object, is silently dropped, and the next-page cursor is
+  derived from the last _raw_ fetched row so pagination never skips or
+  duplicates an event even when a page renders short after suppression.
+  Every public surface (`/users/[username]`, `/lists/[id]` for
+  public/unlisted) takes a nullable viewer id throughout and renders fully
+  signed out. `getProfileLists`/`getPopularPublicLists` add an explicit
+  `visibility = 'public'` filter on top of RLS to keep `unlisted` lists out
+  of browsable indexes while still reachable by direct link.
+
+  **Verification, all clean on this pass**: `npm run lint` (0 errors, the
+  same 4 pre-existing style warnings, none new), `npm run typecheck`
+  (clean against the real regenerated types), `npm test`
+  (**371/371**, 48 files — up from 292 before this prompt), `npm run
+format:check` (clean, after one `npm run format` pass normalized ~20
+  files this prompt touched), and `npm run build` (all 29 routes, including
+  every new one, compiled clean). Not committed, not pushed.
+
+- **Prompt 5 — manual verification (this pass, complete)**: the user
+  personally ran the full live two-user/one-private-list checklist in
+  [docs/SOCIAL.md](./SOCIAL.md#manual-two-user--one-private-list-checklist)
+  against the real app — **all 16 items passed**: private-list creation
+  with an item note; a private list 404s for a signed-out visitor and for
+  User B, and is absent from User A's public Lists tab; an unlisted list is
+  reachable by direct URL but absent from both the Lists tab and
+  `/discover/community`; a public list appears in both; keyboard-only
+  up/down/top/bottom reordering persists after reload; removing a game,
+  importing/adding a replacement, and an existing item note all persist;
+  deleting a list redirects correctly and 404s for everyone afterward;
+  follow/unfollow (including duplicate-click protection) persists
+  correctly; a followed user's public list, review, and diary activity all
+  appear in the follower's `/home` feed; making that list private removes
+  its feed event while leaving the unrelated review/diary events intact;
+  deleting the review removes its feed event and 404s its permalink;
+  signed-out visitors render every public page fully with no owner-only
+  controls leaking; `/home` and `/lists/new` redirect signed-out visitors
+  to the correct `/login?next=...` destination, and incomplete-profile
+  visitors to `/onboarding`. No browser console or standalone-server
+  terminal errors were observed during testing, and User B was separately
+  confirmed unable to reach User A's private list or its edit page, or see
+  reorder controls on it. **Prompt 5 is complete — nothing about it is
+  outstanding.**
+
+  One thing intentionally not covered by this live pass, by design: the
+  authenticated-non-owner rejection path of the `reorder_list_items`
+  database function (a signed-in User B calling it directly against a list
+  they don't own) was verified via the migration's own
+  `has_table_privilege`/`has_function_privilege` assertions and the mocked
+  unit tests in `src/server/actions/lists.test.ts` — not via a manual
+  token-extraction request, which the user correctly avoided rather than
+  handling raw auth tokens in DevTools. This is a deliberate, narrower
+  verification method for that one specific path, not a gap.
 
 ## Where things stand
 
@@ -201,7 +362,7 @@ automated tests — see below for exactly what the retest covered).
    updated to match. A request to `/diary` skipped the profile lookup
    entirely, `onboardingCompleted` silently defaulted to `false`, and the
    route policy redirected to `/onboarding`; that second request to
-   `/onboarding` *is* gated, fetched the real (completed) profile, and
+   `/onboarding` _is_ gated, fetched the real (completed) profile, and
    redirected again to the public profile — a two-hop redirect chain that
    looked like `/diary` itself sent visitors to their profile. Fixed by
    exporting `GATED_PATHS` from `route-policy.ts` as the single source of
@@ -210,7 +371,7 @@ automated tests — see below for exactly what the retest covered).
    `session.test.ts` and `route-policy.test.ts`.
 2. **`/games/[slug]` crashed for a signed-in viewer with their own review**:
    `Error: Attempted to call starGlyphs() from the server but starGlyphs is
-   on the client.` Root cause: `starGlyphs` was defined and exported from
+on the client.` Root cause: `starGlyphs` was defined and exported from
    `review-card.tsx` (`"use client"`); `own-review-card.tsx` (a Server
    Component, added in the previous regression-fix pass) imported and
    called it directly — a plain function call across a Client Component
@@ -479,6 +640,16 @@ confirmed, and both remaining verification items are now done:
 2. `/library` (status tabs, sort, pagination) spot-checked against real
    data — **passed.**
 
-Nothing about Prompt 4 is outstanding. The next milestone is
-**Prompt 5 — Graph & feed**: follows, `activity_events` feed, profile
-pages + stats. See docs/ROADMAP.md. Not started.
+Nothing about Prompt 4 is outstanding.
+
+**Prompt 5 — lists, social & profiles is complete.** Implemented,
+automated-checks-clean, and the user has personally run the full live
+two-user/one-private-list manual checklist in
+[docs/SOCIAL.md](./SOCIAL.md#manual-two-user--one-private-list-checklist) —
+**every item passed, no regressions found.** See "Prompt 5 — Phase A",
+"Prompt 5 — Phase B", and "Prompt 5 — manual verification" near the top of
+this file for the full detail.
+
+Nothing about Prompt 5 is outstanding. The next milestone is **Prompt 7 —
+Pinecone** (Prompt 6 — Lists was merged into Prompt 5, see
+[ROADMAP.md](./ROADMAP.md)). Not started.

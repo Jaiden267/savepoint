@@ -87,6 +87,8 @@ const publiclyReadable = [
   "game_rating_stats",
   "review_like_counts",
   "profile_stats",
+  "user_rating_distribution",
+  "list_public_summary",
 ] as const;
 
 async function checkPublicRead(table: string) {
@@ -373,6 +375,47 @@ async function checkDeleteDenied(table: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 4.5. reorder_list_items RPC (Prompt 5): anon must not be able to execute
+// it at all — the function grants EXECUTE to `authenticated` only.
+//
+// This anonymous script cannot exercise the authenticated-non-owner case
+// (that needs a real second signed-in user, which this script has no way to
+// obtain from just the publishable key) — that runtime check is deferred to
+// Phase B's manual two-user checklist. This check only ever speaks to what
+// `anon` can do, same as every other check in this file.
+// ---------------------------------------------------------------------------
+async function checkReorderRpcDenied() {
+  const { error } = await supabase.rpc("reorder_list_items", {
+    p_list_id: randomUUID(),
+    p_item_ids: [],
+  });
+
+  if (isPermissionDenied(error)) {
+    record(
+      "rpc-denied: reorder_list_items",
+      "PASS",
+      "anon EXECUTE denied at the GRANT layer",
+    );
+    return;
+  }
+
+  if (isMissingFunction(error)) {
+    record(
+      "rpc-denied: reorder_list_items",
+      "CRITICAL",
+      `function not found via API (${error!.code ?? "?"}) — migration likely missing`,
+    );
+    return;
+  }
+
+  record(
+    "rpc-denied: reorder_list_items",
+    "FAIL",
+    `expected permission-denied, got ${error?.code ?? "?"}: ${truncate(error?.message)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 5. Storage: avatars bucket exists and is reachable; no other bucket exists.
 // ---------------------------------------------------------------------------
 async function checkAvatarsBucket() {
@@ -422,6 +465,15 @@ function isMissingTable(error: PostgrestLikeError): boolean {
   );
 }
 
+function isMissingFunction(error: PostgrestLikeError): boolean {
+  if (!error) return false;
+  return (
+    error.code === "42883" ||
+    error.code === "PGRST202" ||
+    /could not find the function/i.test(error.message ?? "")
+  );
+}
+
 function truncate(message: string | undefined, max = 140): string {
   if (!message) return "(no message)";
   return message.length > max ? `${message.slice(0, max)}…` : message;
@@ -438,6 +490,7 @@ async function main() {
   }
   await checkUpdateDenied("profiles", { display_name: "probe" });
   await checkDeleteDenied("reviews");
+  await checkReorderRpcDenied();
   await checkAvatarsBucket();
 
   const width = Math.max(...results.map((r) => r.check.length)) + 2;

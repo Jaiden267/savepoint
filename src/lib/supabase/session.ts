@@ -1,14 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { clientEnv } from "@/lib/env";
-import { resolveRoutePolicy, GATED_PATHS } from "@/lib/auth/route-policy";
+import { resolveRoutePolicy, isGatedPath } from "@/lib/auth/route-policy";
 import type { Database } from "@/types/database";
 
-// GATED_PATHS is imported from route-policy.ts (the paths the route policy
-// actually cares about, restricting the profile lookup to just those to
-// keep the proxy's per-request overhead near-zero for the vast majority of
-// public/ungated requests) rather than duplicated here — a path added to
-// route-policy.ts's own gated sets automatically reaches this check too.
+// isGatedPath() is imported from route-policy.ts (the paths the route
+// policy actually cares about, restricting the profile lookup to just those
+// to keep the proxy's per-request overhead near-zero for the vast majority
+// of public/ungated requests) rather than a duplicated list here — covers
+// both exact-match and pattern-matched (e.g. /lists/[id]/edit) paths, so a
+// path gated in route-policy.ts automatically reaches this check too.
 
 /**
  * Refreshes the Supabase auth session cookie on every matched request, then
@@ -54,7 +55,7 @@ export async function updateSession(request: NextRequest) {
 
   let username: string | null = null;
   let onboardingCompleted = false;
-  if (user && GATED_PATHS.has(pathname)) {
+  if (user && isGatedPath(pathname)) {
     const { data: profile } = await supabase
       .from("profiles")
       .select("username, onboarding_completed_at")

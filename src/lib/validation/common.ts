@@ -29,3 +29,18 @@ export const optionalStarsFieldSchema = z.preprocess(
   toNumberOrRaw,
   starRatingSchema.nullable(),
 );
+
+/**
+ * Shape of a decoded activity-feed keyset cursor: the `created_at`/`id` of
+ * the last row on the previous page, used to build a `(created_at, id) <
+ * (t, i)` comparison for the next page. Validated on decode so a
+ * malformed/tampered cursor (bad base64, wrong shape, non-uuid `i`) is
+ * rejected with a friendly reset to page 1 rather than a raw error — see
+ * src/server/services/activity-feed.ts for the encode/decode functions that
+ * use this.
+ */
+export const cursorSchema = z.object({
+  t: z.iso.datetime({ offset: true }),
+  i: uuidSchema,
+});
+export type Cursor = z.infer<typeof cursorSchema>;
