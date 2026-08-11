@@ -1,0 +1,71 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# testing / test output
+/coverage
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
+# misc
+.DS_Store
+Thumbs.db
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files — every real env file is ignored; the checked-in example with
+# empty placeholders is explicitly allowed back in.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env*.local
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editors / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Supabase CLI local runtime state (config.toml + migrations are committed)
+supabase/.branches
+supabase/.temp
+
+# Claude Code local state — machine/session-specific (dev-server launch
+# config, permission grants, scheduler lock file, worktrees). Never rely on
+# a developer's personal global gitignore for this; it must be excluded by
+# the repo itself so a fresh clone/CI/ZimaOS checkout is safe by default.
+.claude/
+/worktrees/

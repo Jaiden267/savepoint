@@ -1,0 +1,24 @@
+# Normalize everything to LF in the repo and on checkout (Linux-friendly —
+# this project ships in a Linux Docker container on ZimaOS). Git still stores
+# LF internally regardless of this file; `eol=lf` also forces LF on checkout
+# even on Windows, so editors here don't accidentally reintroduce CRLF.
+* text=auto eol=lf
+
+# Windows-native script types must keep CRLF: cmd.exe and PowerShell treat a
+# LF-only file as fine in modern versions, but batch files historically
+# misbehave without CRLF, so pin them explicitly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets: never touch line endings, never diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
