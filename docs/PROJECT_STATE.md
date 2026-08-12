@@ -4,10 +4,11 @@ Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
 _Last updated: 2026-08-12 (Prompt 7C — broad IGDB catalogue semantic
-indexing, Gates A1/A2/B/C — **infrastructure complete, automated-checks-
-clean, and a real 25-record canary has been indexed. Gates D (bounded
-expansion) and E (full sync) remain pending, each behind a separate
-explicit approval.**
+indexing, Gates A1/A2/B/C/D — **infrastructure complete,
+automated-checks-clean, and 125 real catalogue records are now indexed
+(25 Gate C canary + 100 Gate D). Gate D also proved a real interruption/
+resume cycle against live IGDB/Supabase/Pinecone. Gate E (full sync)
+remains pending, behind a separate explicit approval.**
 Gate A1 (migration `20260813120000_add_igdb_catalogue_sync_infrastructure.sql`)
 applied and live-verified by the user. Gate A2 built the resumable,
 checkpointed catalogue-discovery system (three new tables, one atomic
@@ -40,10 +41,24 @@ flag. `sync` got a stronger fix — a new `selectWithinTokenBudget()`
 batch rather than ever knowingly sending one over the declared ceiling
 (this is what actually happened in the canary: a 25-record batch's
 margined estimate came in ~1.8% over its declared 15,000-token ceiling).
-Regression-tested (7 new tests). 543/543 automated tests pass. See
-"Prompt 7C" below and
+Regression-tested (7 new tests). 543/543 automated tests pass.
+**Gate D** then ran a bounded 100-record expansion specifically to prove
+interruption/resume: discovery resumed the same `discover:balanced:gen1`
+cursor (no new generation) for 100 more candidates; a real, manually
+performed Ctrl+C interrupted sync after exactly 2 batches (50 records) —
+verified live (not from the transcript, which didn't capture the child
+process's stdout under Windows `Start-Transcript`) to have released the
+lease, left the other 50 candidates untouched and resumable, and made no
+writes after signal handling began; the run then resumed with the
+recalculated remaining cumulative allowance (never a reset) and finished
+the other 50 records cleanly. Final state: 125/125 ledger rows synced,
+Pinecone 34→134 (+100 exactly), 0 duplicate `igdb_id`s, all schema v2,
+lease free. Total Gate D usage: 10/20 requests, ~3/30 minutes,
+~47,571/75,000 margined tokens — the ceiling fix ran on every batch but
+had nothing to trim this time (unlike Gate C, which hit the boundary
+exactly). See "Prompt 7C" below and
 [PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c) for full
-detail, including the Gate C results table. Prompt 8 — design,
+detail, including the Gate C and Gate D results tables. Prompt 8 — design,
 responsive layout & accessibility pass — remains **complete, automated-
 checks-clean, and fully manually verified by the user, including a
 post-completion fix.** Retuned
@@ -1177,7 +1192,7 @@ currently indexed games, no new console/hydration errors).
 
 Nothing about Prompt 8 is outstanding.
 
-**Prompt 7C — broad IGDB catalogue semantic indexing — Gates A1/A2/B/C
+**Prompt 7C — broad IGDB catalogue semantic indexing — Gates A1/A2/B/C/D
 complete.** The migration is applied and live-verified; the full
 resumable/checkpointed discovery system, schema v2 record shape,
 `igdb_id`-based hydration fix, catalogue-only result rendering with its
@@ -1209,7 +1224,30 @@ batch land ~1.8% over its declared token ceiling. Discovery cursor
 candidates scanned, resumable) — not completed, by design, since Gate C
 is capped at 25.
 
-**Gates D** (a user-approved bounded batch, resuming the same cursor)
-**and E** (full background sync) each require their own separate,
-explicit approval, same as before. Nothing about Gates A1/A2/B/C is
+**Gate D** ran a real, bounded 100-record expansion of the same
+`balanced` profile, specifically to prove interruption/resume against
+live services — see [PINECONE.md's Gate D results
+table](./PINECONE.md#gate-d-results--bounded-expansion-with-real-interruptionresume-2026-08-12)
+for exact numbers. Discovery resumed `discover:balanced:gen1` (no new
+generation) for 100 more candidates. A real, manually performed Ctrl+C
+interrupted `sync` after exactly 2 batches (50 records) — independently
+verified from live Supabase/Pinecone state (not the PowerShell
+transcript, which didn't capture the child process's own stdout under
+Windows `Start-Transcript`) to have exited 130, released the lease, made
+no writes after signal handling began, and left the other 50 candidates
+untouched and resumable. The remaining cumulative Gate D allowance was
+recalculated from actual observed usage (never reset) and the run
+resumed cleanly to completion. Final: 125/125 ledger rows synced,
+Pinecone 34→134 (+100 exactly), 0 duplicate `igdb_id`s, all schema v2,
+lease free, 10/20 requests, ~3/30 minutes, ~47,571/75,000 margined
+tokens used — the ceiling fix ran on every batch but had nothing to trim
+this run. Discovery cursor `discover:balanced:gen1` is at 125 of
+~26,676 candidates scanned, still resumable for a future Gate E. **The
+user manually browser-verified the full flow against the real Gate D
+data (semantic search surfacing catalogue-only games, POST-based import,
+real metadata with no fabricated data, cache re-hit, keyboard
+operability, no console errors) — all PASS.**
+
+**Gate E** (full background sync) requires its own separate, explicit
+approval, same as before. Nothing about Gates A1/A2/B/C/D is
 outstanding.

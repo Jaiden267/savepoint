@@ -746,9 +746,90 @@ as the allowance shrinks across sequential calls; zero records are
 selected when even the first one can't fit; a batch exactly matching the
 remaining allowance is still fully accepted (`<=`, not `<`); raw and
 margined estimates are reported as distinct, correctly computed values;
-selection never reorders — trimming is always the ordered suffix. No
-further live catalogue sync has been run since this fix — it's
-unit-tested, not yet re-verified against a real IGDB/Pinecone canary.
+selection never reorders — trimming is always the ordered suffix.
+
+### Gate D results — bounded expansion with real interruption/resume (2026-08-12)
+
+Purpose: prove interruption, lease release, checkpoint preservation, and
+clean resumption against the real IGDB/Supabase/Pinecone services, at a
+larger (but still tightly bounded) scale than Gate C's canary. Preflight
+(read-only): quota docs still Builder/10M-month/250K-min; index/namespace
+compatible; lease free; `discover:balanced:gen1` unchanged since Gate C
+(paused at 25 candidates); ledger/Pinecone reconciled. All confirmed
+before any mutation.
+
+**Discovery** — resumed `discover:balanced:gen1` (no `--new-generation`)
+for exactly 100 new candidates (2 pages of 50, both 100% eligible),
+picking up correctly from `id > 26`. 3 IGDB requests.
+
+**Sync, real interruption** — a real interactive Ctrl+C, performed
+manually by the operator in their own PowerShell console (a genuine
+SIGINT delivered through Windows console control events is not something
+this agent's tool calls can reliably reproduce — a programmatic signal
+wouldn't faithfully reproduce real Ctrl+C behavior, so this was
+deliberately not simulated). `Start-Transcript` captured PowerShell's own
+session but — a known Windows limitation — not the native `node` child
+process's own stdout, so the batch counts below are derived entirely from
+live Supabase/Pinecone state, not the transcript text:
+
+| Check                                   | Result                                                                                          |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Batches/records completed before signal | 2 batches, 50 records (ledger synced 25→75; Pinecone 34→84)                                     |
+| Exit code                               | 130 (confirmed in transcript)                                                                   |
+| Writes after signal handling began      | None — 0 of the 50 remaining rows show any claim attempt                                        |
+| Lease                                   | Free (token/holder/command/acquired_at/lease_until all null)                                    |
+| Unfinished records                      | 50 pending, all untouched (`attempt_count = 0`), cleanly resumable                              |
+| Duplicate `igdb_id`s                    | 0 (125/125 unique in ledger; 50/50 unique among new Pinecone records)                           |
+| Timestamp cross-check                   | Latest `last_synced_at`/`last_attempted_at` both fall inside the transcript's wall-clock window |
+
+**Recalculated remaining Gate D allowance** (actual observed usage, not a reset):
+
+| Resource              | Cap    | Consumed (discovery + interrupted sync)           | Remaining for resume |
+| --------------------- | ------ | ------------------------------------------------- | -------------------- |
+| Candidates discovered | 100    | 100                                               | 0 (discovery done)   |
+| Records synced        | 100    | 50                                                | 50                   |
+| IGDB requests         | 20     | 8                                                 | 12                   |
+| Runtime               | 30 min | ~2 min                                            | 28 min               |
+| Margined tokens       | 75,000 | 24,154 (measured live from the 50 synced records) | 50,846               |
+
+**Resumed sync** — `sync --limit 50 --max-requests 12
+--max-runtime-minutes 28 --max-estimated-embedding-tokens 50846
+--execute`, no `--new-generation`, no reset. Completed cleanly (2 more
+batches, 50 records, 0 build failures, `limit_reached`, exit 0) — the
+full 100-record Gate D allocation is now synced.
+
+**Final reconciliation**:
+
+| Metric                                            | Result                                                                                                                                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ledger                                            | 125 rows total, 125 synced, 0 pending, 0 failed                                                                                                                                                    |
+| Pinecone before → after (Gate D only)             | 34 → 134 (exactly +100)                                                                                                                                                                            |
+| `schema_version` on all 100 new records           | 2 (confirmed via live `fetch`, 0 wrong)                                                                                                                                                            |
+| Duplicate `igdb_id`s across all 100               | 0 (100/100 unique)                                                                                                                                                                                 |
+| `verify --sample 100`                             | 100/100 found in Pinecone                                                                                                                                                                          |
+| Lease                                             | Free                                                                                                                                                                                               |
+| Total IGDB requests (discovery + both sync runs)  | 10 of 20                                                                                                                                                                                           |
+| Total runtime (discovery + interrupted + resumed) | ~3 min of 30                                                                                                                                                                                       |
+| Total margined tokens (both sync runs combined)   | ~47,571 of 75,000 (63%)                                                                                                                                                                            |
+| Total raw tokens                                  | ~36,593                                                                                                                                                                                            |
+| Token-ceiling trims triggered                     | 0 — both batches fit comfortably under their allowance every time; `selectWithinTokenBudget()` ran on every batch but had nothing to trim this run (unlike Gate C, which hit the boundary exactly) |
+
+Discovery cursor `discover:balanced:gen1` is still not `completed_at`
+(125 of ~26,676 balanced candidates scanned) — fully resumable for a
+future Gate E via `last_applied_page_key`, no re-work.
+
+**Manual browser verification (2026-08-12, user-run against the real
+Gate D data)** — all PASS: semantic search returned newly discovered
+catalogue-only games; a catalogue-only result rendered as a form/button
+rather than a normal GET link; selecting it issued a POST and redirected
+successfully to `/games/<slug>`; the imported page displayed real IGDB
+metadata with no fabricated ratings, reviews, or activity; repeating the
+semantic search rendered the imported game as a normal cached result;
+keyboard-only activation of another catalogue-only result worked; no
+unexpected browser-console errors.
+
+No live catalogue sync has run since this report — Gate E remains
+unauthorized.
 
 ### ZimaOS scheduling (documented only — not wired)
 
