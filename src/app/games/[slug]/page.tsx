@@ -6,7 +6,10 @@ import {
   GameImportRateLimitedError,
 } from "@/server/services/game-sync";
 import { getGameSocialData } from "@/server/services/game-social";
+import { getGameTaggedRefs } from "@/server/services/game-refs";
+import { syncGameVector } from "@/lib/pinecone/sync";
 import { createClient } from "@/lib/supabase/server";
+import { after } from "next/server";
 import { getClientIdentifier } from "@/lib/auth/request-ip";
 import { gameSlugSchema } from "@/lib/validation/games";
 import { GameHero } from "@/components/games/game-hero";
@@ -22,41 +25,9 @@ interface Props {
   params: Promise<{ slug: string }>;
 }
 
-interface NamedRef {
-  id: number;
-  name: string;
-  slug: string;
-}
-
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   return { title: slug };
-}
-
-/** Resolves a game's tagged reference rows (genres/platforms/modes/themes) via the join table, in two safe steps rather than relying on nested-embed type inference against the hand-patched types.ts. */
-async function fetchTaggedRefs(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  joinTable:
-    "game_genres" | "game_platforms" | "game_game_modes" | "game_themes",
-  joinColumn: "genre_id" | "platform_id" | "game_mode_id" | "theme_id",
-  refTable: "genres" | "platforms" | "game_modes" | "themes",
-  gameId: string,
-): Promise<NamedRef[]> {
-  const { data: links } = await supabase
-    .from(joinTable)
-    .select("*")
-    .eq("game_id", gameId);
-
-  const ids = (links ?? [])
-    .map((link) => (link as unknown as Record<string, number>)[joinColumn])
-    .filter((id): id is number => typeof id === "number");
-  if (ids.length === 0) return [];
-
-  const { data: refs } = await supabase
-    .from(refTable)
-    .select("id, name, slug")
-    .in("id", ids);
-  return refs ?? [];
 }
 
 export default async function GamePage({ params }: Props) {
@@ -86,28 +57,23 @@ export default async function GamePage({ params }: Props) {
 
   if (!game) notFound();
 
+  // Best-effort, non-blocking: never delays this response and never fails
+  // the page if Pinecone is unavailable — syncGameVector never throws and
+  // short-circuits instantly for games that are already synced or whose
+  // retry budget is exhausted. This route already reads the session below
+  // (force-dynamic), so it's a confirmed live request context — after()
+  // never fires during `next build`.
+  after(() => {
+    syncGameVector(game.id).catch(() => {});
+  });
+
   const supabase = await createClient();
   const {
     data: { user: viewer },
   } = await supabase.auth.getUser();
 
-  const [genres, platforms, gameModes, themes, social] = await Promise.all([
-    fetchTaggedRefs(supabase, "game_genres", "genre_id", "genres", game.id),
-    fetchTaggedRefs(
-      supabase,
-      "game_platforms",
-      "platform_id",
-      "platforms",
-      game.id,
-    ),
-    fetchTaggedRefs(
-      supabase,
-      "game_game_modes",
-      "game_mode_id",
-      "game_modes",
-      game.id,
-    ),
-    fetchTaggedRefs(supabase, "game_themes", "theme_id", "themes", game.id),
+  const [{ genres, platforms, gameModes, themes }, social] = await Promise.all([
+    getGameTaggedRefs(supabase, game.id),
     getGameSocialData(game.id, game.slug, viewer?.id ?? null),
   ]);
 

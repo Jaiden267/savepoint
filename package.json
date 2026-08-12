@@ -20,7 +20,10 @@
     "check-env": "node scripts/check-env.ts",
     "verify-schema": "node scripts/verify-schema.mts",
     "igdb:smoke-test": "node scripts/igdb-smoke-test.mts",
-    "verify-standalone": "node scripts/smoke-test-standalone.mts"
+    "verify-standalone": "node scripts/smoke-test-standalone.mts",
+    "pinecone:bootstrap": "node scripts/pinecone-bootstrap.mts",
+    "pinecone:backfill": "node scripts/pinecone-backfill.mts",
+    "pinecone:smoke-test": "node scripts/pinecone-smoke-test.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

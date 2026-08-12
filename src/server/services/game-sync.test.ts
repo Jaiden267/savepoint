@@ -181,9 +181,29 @@ describe("upsertGameFromIgdbDetail", () => {
       { game_id: IMPORTED_GAME.id, genre_id: 12 },
     ]);
     expect(tableMocks.game_vector_sync.upsert).toHaveBeenCalledWith(
-      { game_id: IMPORTED_GAME.id, status: "pending" },
+      {
+        game_id: IMPORTED_GAME.id,
+        status: "pending",
+        last_attempted_at: null,
+      },
       { onConflict: "game_id" },
     );
+  });
+
+  it("resets last_attempted_at to null so a freshly (re)imported game is immediately claimable, never looking like it's still under an active sync lease", async () => {
+    const tableMocks = setupAdminMock();
+
+    await upsertGameFromIgdbDetail(SAMPLE_DETAIL);
+
+    const [payload] = (
+      tableMocks.game_vector_sync.upsert as ReturnType<typeof vi.fn>
+    ).mock.calls[0] as [Record<string, unknown>, unknown];
+    expect(payload.last_attempted_at).toBeNull();
+    // attempt_count/error/last_synced_at are deliberately absent from the
+    // payload — left untouched on conflict, preserved as historical record.
+    expect(payload).not.toHaveProperty("attempt_count");
+    expect(payload).not.toHaveProperty("error");
+    expect(payload).not.toHaveProperty("last_synced_at");
   });
 
   it("running the same upsert twice still targets games by onConflict: igdb_id both times — the mechanism that structurally prevents a duplicate row (end-to-end row-uniqueness is additionally verified by the live smoke test)", async () => {

@@ -16,7 +16,7 @@ function escapeIlikePattern(value: string): string {
   return value.replace(/[%_]/g, (match) => `\\${match}`);
 }
 
-function toSearchResult(
+export function toSearchResult(
   row: Pick<
     GameRow,
     | "igdb_id"

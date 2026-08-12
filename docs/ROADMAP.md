@@ -43,6 +43,17 @@ fixed — do not renumber later stages when adding work to an earlier one.
 - [ ] **Prompt 7 — Pinecone**: index bootstrap (`llama-text-embed-v2`,
       namespace `games`), on-demand upsert via `game_vector_sync`, semantic
       search, recommendations + reasons, `recommendation_feedback`. Replaces
-      the placeholder in `src/lib/pinecone/`.
+      the placeholder in `src/lib/pinecone/`. **Semantic search half is
+      complete and live-verified**: the `savepoint-games` index is
+      bootstrapped (integrated embedding, `llama-text-embed-v2`, namespace
+      `games`, deletion protection enabled), the concurrency-safe
+      on-demand + backfillable sync pipeline is live, a bounded 5-game
+      backfill and the three-query smoke test both ran successfully against
+      the real index with every hit resolving to a genuine Supabase `games`
+      row, and `/search` has a working semantic mode with lexical fallback.
+      See [PINECONE.md](./PINECONE.md) and
+      [PROJECT_STATE.md](./PROJECT_STATE.md). **Recommendations and
+      reasons, and `recommendation_feedback`, are not started** — left for
+      a later pass, hence this line stays unchecked.
 - [ ] **Prompt 8 — Hardening/deploy**: Playwright e2e, accessibility/contrast
       pass, Dockerfile, ZimaOS deployment, cron refresh endpoint.

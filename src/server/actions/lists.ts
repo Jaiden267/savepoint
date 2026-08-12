@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth/require-user";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logActionError } from "@/server/actions/log-action-error";
 import { importGameByIgdbId } from "@/server/services/game-sync";
+import { syncGameVector } from "@/lib/pinecone/sync";
 import {
   createListSchema,
   updateListSchema,
@@ -226,6 +228,13 @@ export async function addListItemAction(
       message: "Couldn't add that game right now. Please try again.",
     };
   }
+
+  // Best-effort, non-blocking — never delays or fails this action if
+  // Pinecone is unavailable. Server Actions never execute during
+  // `next build`, so this is a confirmed live request context.
+  after(() => {
+    syncGameVector(game.id).catch(() => {});
+  });
 
   const { data: maxPositionRow } = await supabase
     .from("list_items")

@@ -3,16 +3,154 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-13 (Prompt 5 — lists, social & profiles — **complete
-and fully manually verified.** Migration 19 is applied and confirmed live;
-all Phase B application code (validation, services, actions, components,
-routes, tests, docs) is written, every automated check
-(lint/typecheck/test/format/build) is clean, and the user has personally
-run the full live two-user/one-private-list manual checklist —
-**every item passed, no regressions found.** See "Prompt 5 — Phase A",
-"Prompt 5 — Phase B", and "Prompt 5 — manual verification" below for the
-full history. Prompt 4 — core tracking — remains **complete and fully
-manually verified**; its own history is preserved below unchanged.)._
+_Last updated: 2026-08-12 (Prompt 7 — Pinecone semantic search —
+**semantic search half complete and fully manually verified.** The user
+ran `npm run pinecone:bootstrap` and confirmed success (index
+`savepoint-games`, namespace `games`, model `llama-text-embed-v2`,
+deletion protection enabled). Phase B then ran against the real index: a
+read-only compatibility check, a bounded 5-game backfill (5 synced, 0
+failed), the three-query smoke test (15 hits, 0 failures, every hit
+resolved to a genuine Supabase `games` row), and the user's own manual
+browser check — **every item passed.** Manual testing also surfaced an
+expected coverage limitation, not a defect: semantic search only covers
+games already imported into Supabase and synced to Pinecone (currently the
+5 backfilled games), not the wider IGDB catalogue — see "Prompt 7 — Phase
+B" below and [PINECONE.md](./PINECONE.md) for full detail. **Recommendations
+and `recommendation_feedback` remain explicitly out of scope, not
+started.** No migration needed or created — `game_vector_sync` has existed
+since migration 6 with exactly the shape the sync pipeline needs. Prompt 5
+— lists, social & profiles — remains **complete and fully manually
+verified**; Prompt 4 — core tracking — remains **complete and fully
+manually verified**; both histories are preserved below unchanged.)._
+
+## Prompt 7 — Phase A (this pass, implementation complete)
+
+Labelled "Prompt 7" per [ROADMAP.md](./ROADMAP.md)'s existing numbering —
+"Prompt 6 — Lists" was already merged into Prompt 5 and left as a
+placeholder line so numbering would never shift.
+
+Full architecture and rationale live in [PINECONE.md](./PINECONE.md); this
+section tracks completion status only.
+
+**No migration required or created.** `game_vector_sync` (migration 6) has
+had exactly the needed shape — `status`/`attempt_count`/`last_attempted_at`/
+`error`/`last_synced_at`, zero grants for `anon`/`authenticated` — since
+Prompt 1. The entire concurrency-safe sync design (a recoverable lease built
+from those existing columns) required no schema change.
+
+Split on an external-mutation boundary instead of a database-migration one:
+application runtime code never creates, deletes, or mutates the Pinecone
+index — only `scripts/pinecone-bootstrap.mts`, run manually, is permitted
+to call `createIndexForModel`. Phase A (this pass) implements and tests
+every module against a **mocked** Pinecone SDK; no real index exists yet.
+
+**Written and tested this pass:**
+
+- `src/lib/pinecone/`: `constants.ts`, `index-compat.ts`, `record-text.ts`,
+  `error-sanitizer.ts` (pure), `client.ts` (describe/validate only, never
+  creates), `sync.ts` (lease-based concurrency-safe `syncGameVector`),
+  `search.ts` (`searchGameIds` — no Supabase dependency at all).
+- `src/server/services/game-refs.ts` (extracted shared join-fetch, second
+  real call site alongside `src/app/games/[slug]/page.tsx`, which was
+  refactored to use it) and `semantic-search.ts` (rate-limited, Zod-
+  validated, request-scoped-client-only orchestration with lexical
+  fallback).
+- `src/server/services/game-sync.ts`: the `game_vector_sync` pending-upsert
+  now also resets `last_attempted_at: null` so a freshly (re)imported game
+  is immediately claimable rather than looking like it's under an active
+  sync lease.
+- `after()` wired at the two confirmed dynamic request call sites
+  (`/games/[slug]` page render, `addListItemAction`) — best-effort,
+  non-blocking, never inside the generic reusable import helper.
+- `/search/page.tsx`: lexical/semantic mode toggle, fallback notice.
+- `scripts/pinecone-bootstrap.mts` (administrative, manual-only),
+  `scripts/pinecone-backfill.mts` (resumable, bounded, self-concurrency
+  lock, same lease protocol as `sync.ts` reimplemented inline),
+  `scripts/pinecone-smoke-test.mts` (read-only Phase B verification) — new
+  `npm run pinecone:bootstrap` / `pinecone:backfill` / `pinecone:smoke-test`
+  scripts.
+- Unit tests for every module above, including the lease-specific scenarios
+  (second worker arriving mid-claim, recovery after an expired lease, an
+  older worker's finalize write losing to a newer claim, a freshly
+  re-imported game being immediately claimable, zero Pinecone calls under
+  an active lease).
+- `docs/PINECONE.md` (new, full architecture).
+
+**Stop condition for this pass**: all automated checks
+(lint/typecheck/test/format/build) clean, `next build` output checked to
+confirm `/games/[slug]` and `/search` are not statically generated.
+
+**Post-Phase-A fix**: the user's first `npm run pinecone:bootstrap` attempt
+failed before executing anything (`ERR_MODULE_NOT_FOUND` —
+`src/lib/pinecone/index-compat.ts` imported its sibling `./constants`
+without a file extension; this works under webpack/Vitest but not under
+Node's native TypeScript type-stripping, which the four `scripts/*.mts`
+files rely on and which requires explicit extensions). Fixed by adding
+explicit `.ts` extensions to every relative import across
+`src/lib/pinecone/*.ts` (already permitted project-wide by tsconfig's
+`allowImportingTsExtensions`) — no new runner added, native Node
+type-stripping remains the tool, consistent with the other three scripts.
+While verifying the fix, a second real bug surfaced: `pinecone-backfill.mts`
+called `process.exit(1)` directly inside its `try` block on a missing
+index, which skips `finally { releaseLock() }` and leaks the self-
+concurrency lock file — fixed by throwing instead and setting
+`process.exitCode` at the top level, after the lock is released. Also added
+`npm run pinecone:bootstrap -- --check` (alias `--dry-run`): fully loads
+modules, validates env, authenticates, lists/describes indexes — never
+creates/deletes/configures/upserts anything — used to verify both fixes
+before the real (mutating) bootstrap ran.
+
+## Prompt 7 — Phase B (this pass, live-verified)
+
+The user ran `npm run pinecone:bootstrap` and confirmed success: index
+`savepoint-games`, namespace `games`, model `llama-text-embed-v2`, deletion
+protection `enabled`, no error. Phase B then ran, in order:
+
+1. `npm run pinecone:bootstrap -- --check` (read-only) — confirmed the live
+   index is compatible: `isIndexCompatible()` passed, host resolved,
+   `deletionProtection: enabled`.
+2. `npm run pinecone:backfill -- --limit 5` (bounded, exactly 5 — no more)
+   — **5 candidates fetched, 5 claimed, 5 synced, 0 failed, 0 skipped** of
+   any kind. Confirms the claim-first lease protocol, the join-fetch, the
+   text/field builders, and the real `upsertRecords` call all work
+   end-to-end against the live index.
+3. `npm run pinecone:smoke-test` (read-only) — the three example queries
+   ("atmospheric science-fiction exploration", "cosy farming game with
+   relationships", "difficult tactical RPG with meaningful choices") each
+   returned 5 hits (15 total, 0 failures). **Every single hit resolved to a
+   genuine Supabase `games` row** (real name/slug/uuid printed for each —
+   no "no matching Supabase row" lines, which would indicate a stale-index
+   orphan) — confirms the id-based mapping back to Supabase is correct, not
+   just that Pinecone returned _something_.
+4. Final state: **index `savepoint-games`, namespace `games`, 5 records** —
+   confirmed via `describeIndexStats()` in the backfill run's own summary.
+   No credential values or raw upstream error bodies were ever printed at
+   any step (all scripts route errors through
+   `sanitizeErrorForStorage()`/fixed labels only).
+
+No index was created, deleted, recreated, or reconfigured this pass (only
+the one prior `npm run pinecone:bootstrap` run, done by the user, did
+that). No more than the bounded 5-game batch was upserted. Recommendations
+and `recommendation_feedback` were not started. No Supabase migration was
+created — none was needed.
+
+**Manual browser verification (passed)**: semantic mode loads successfully,
+semantic results render from the live Pinecone index, no lexical-fallback
+warning appeared, the Standard/Semantic toggle works, no browser error page
+appeared.
+
+**Coverage clarification found during manual testing**: semantic search
+only covers games already imported into Savepoint's Supabase cache _and_
+synced to Pinecone — it does not discover arbitrary games from the wider
+IGDB catalogue. As of this writing that means only the 5 games from the
+bounded Phase B backfill are semantically searchable. This is expected
+under the approved on-demand cached-game indexing architecture and the
+deliberately bounded 5-game Phase B backfill — **not a defect.** Lexical
+search is unaffected (it still falls back to a live IGDB query for
+uncached titles, as before). See
+[PINECONE.md](./PINECONE.md#coverage-cached-games-only-not-the-wider-igdb-catalogue)
+for full detail. Broadening coverage (organic imports over time, or a
+larger backfill/bulk IGDB ingestion) is out of scope for this pass.
 
 ## Prompt 5 — Phase A (this pass)
 
@@ -650,6 +788,27 @@ two-user/one-private-list manual checklist in
 "Prompt 5 — Phase B", and "Prompt 5 — manual verification" near the top of
 this file for the full detail.
 
-Nothing about Prompt 5 is outstanding. The next milestone is **Prompt 7 —
-Pinecone** (Prompt 6 — Lists was merged into Prompt 5, see
-[ROADMAP.md](./ROADMAP.md)). Not started.
+Nothing about Prompt 5 is outstanding.
+
+**Prompt 7 — Pinecone semantic search — semantic search half complete and
+fully manually verified.** (Prompt 6 — Lists was merged into Prompt 5, see
+[ROADMAP.md](./ROADMAP.md).) The user bootstrapped the real index
+(`savepoint-games`, namespace `games`, model `llama-text-embed-v2`,
+deletion protection enabled), Phase B ran end-to-end against it (read-only
+compatibility check, bounded 5-game backfill — 5 synced, 0 failed — and
+the three-query smoke test — 15 hits, 0 failures, every hit resolved to a
+genuine Supabase row), and the user personally ran the manual browser
+checklist — **every item passed.** See "Prompt 7 — Phase A", "Prompt 7 —
+Phase B" near the top of this file, and [PINECONE.md](./PINECONE.md) for
+full detail.
+
+**Known, expected limitation (confirmed during manual testing, not a
+defect)**: semantic search only covers games already imported into
+Supabase and synced to Pinecone — currently the 5 backfilled games — not
+the wider IGDB catalogue. This is inherent to the approved on-demand
+cached-game indexing architecture and the deliberately bounded Phase B
+backfill. Lexical search is unaffected.
+
+**Recommendations and reasons, and `recommendation_feedback`, are
+explicitly not started** — deferred to a later pass. Nothing else about
+the semantic search half of Prompt 7 is outstanding.

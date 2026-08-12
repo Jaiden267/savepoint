@@ -8,3 +8,15 @@ import { vi } from "vitest";
 // runtime behavior; it says nothing about client-bundle safety, which is
 // enforced by the Next.js build itself, not by tests.
 vi.mock("server-only", () => ({}));
+
+// `after()` throws "called outside a request scope" unless invoked during a
+// real Next.js request — which unit tests never provide. Stub it to a no-op
+// (never invoking the callback, matching the fact that these callbacks are
+// always wrapped in their own `.catch()` and are explicitly best-effort) so
+// code paths that call `after()` stay unit-testable. Preserves every other
+// `next/server` export (NextRequest/NextResponse, used directly by several
+// route-handler tests) via importOriginal.
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: () => {} };
+});

@@ -129,11 +129,18 @@ export async function upsertGameFromIgdbDetail(
   }
 
   // Marks the game for Pinecone sync without requiring Pinecone to be
-  // available yet — the Pinecone milestone's cron/worker drains "pending"
-  // rows; nothing here calls Pinecone.
+  // available yet — src/lib/pinecone/sync.ts drains "pending" rows on
+  // demand; nothing here calls Pinecone. `last_attempted_at: null` resets
+  // the sync lease marker so a freshly (re)imported game is immediately
+  // claimable, rather than looking like it's still under an active lease
+  // from a previous attempt. attempt_count, error and last_synced_at are
+  // deliberately left untouched — preserved as historical record.
   const { error: vectorSyncError } = await admin
     .from("game_vector_sync")
-    .upsert({ game_id: game.id, status: "pending" }, { onConflict: "game_id" });
+    .upsert(
+      { game_id: game.id, status: "pending", last_attempted_at: null },
+      { onConflict: "game_id" },
+    );
   if (vectorSyncError) throw vectorSyncError;
 
   return game;
