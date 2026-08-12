@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { updateProfileAction } from "@/server/actions/profile";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
 import { ProfileForm } from "@/components/profile/profile-form";
 import { AvatarUploader } from "@/components/profile/avatar-uploader";
 import { getInitials } from "@/lib/get-initials";
@@ -34,9 +34,7 @@ export default async function ProfileSettingsPage() {
 
   return (
     <main className="mx-auto w-full max-w-lg px-4 py-12">
-      <Heading level="h3" as="h1" className="mb-6">
-        Profile settings
-      </Heading>
+      <PageHeader title="Profile settings" />
 
       <section className="mb-8">
         <AvatarUploader

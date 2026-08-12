@@ -5,7 +5,8 @@ import { PosterGrid } from "@/components/games/poster-grid";
 import { IgdbAttribution } from "@/components/games/igdb-attribution";
 import { EmptyState } from "@/components/common/empty-state";
 import { LinkButton } from "@/components/common/link-button";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
+import { Pagination } from "@/components/common/pagination";
 
 export const metadata: Metadata = {
   title: "Discover",
@@ -27,9 +28,7 @@ export default async function DiscoverPage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Discover
-      </Heading>
+      <PageHeader title="Discover" />
 
       {games.length === 0 ? (
         <EmptyState
@@ -51,33 +50,11 @@ export default async function DiscoverPage({ searchParams }: Props) {
               source: "local" as const,
             }))}
           />
-          <nav
-            className="mt-8 flex items-center justify-between"
-            aria-label="Pagination"
-          >
-            {page > 1 ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/discover?page=${page - 1}`}
-              >
-                Previous
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-            {hasMore ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/discover?page=${page + 1}`}
-              >
-                Next
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-          </nav>
+          <Pagination
+            page={page}
+            hasMore={hasMore}
+            makeHref={(p) => `/discover?page=${p}`}
+          />
         </>
       )}
 

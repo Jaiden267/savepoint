@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
+import { expectNoAxeViolations } from "@/test/axe";
 import { EmptyState } from "./empty-state";
 import { ErrorState } from "./error-state";
 
@@ -34,5 +36,11 @@ describe("ErrorState", () => {
     await user.click(screen.getByRole("button", { name: "Try again" }));
 
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("has no axe violations (spot-check)", async () => {
+    const { container } = render(<ErrorState onRetry={() => {}} />);
+
+    expectNoAxeViolations(await axe(container));
   });
 });

@@ -12,6 +12,7 @@ import { ProfileListRow } from "@/components/social/profile-list-row";
 import { ListCard } from "@/components/lists/list-card";
 import { ReviewCard } from "@/components/reviews/review-card";
 import { EmptyState } from "@/components/common/empty-state";
+import { PageHeader } from "@/components/common/page-header";
 import { Heading } from "@/components/common/typography";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,9 +37,7 @@ export default async function CommunityDiscoveryPage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Community
-      </Heading>
+      <PageHeader title="Community" />
 
       <section>
         <Heading level="h4" as="h2">

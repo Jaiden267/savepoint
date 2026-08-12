@@ -8,7 +8,8 @@ import { LogDiaryEntryDialog } from "@/components/games/log-diary-entry-dialog";
 import { DeleteDiaryEntryButton } from "@/components/diary/delete-diary-entry-button";
 import { EmptyState } from "@/components/common/empty-state";
 import { LinkButton } from "@/components/common/link-button";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
+import { Pagination } from "@/components/common/pagination";
 
 export const metadata: Metadata = { title: "Diary" };
 
@@ -47,9 +48,7 @@ export default async function DiaryPage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Diary
-      </Heading>
+      <PageHeader title="Diary" />
 
       {entries.length === 0 ? (
         <EmptyState
@@ -111,33 +110,11 @@ export default async function DiaryPage({ searchParams }: Props) {
               </li>
             ))}
           </ul>
-          <nav
-            className="mt-8 flex items-center justify-between"
-            aria-label="Pagination"
-          >
-            {page > 1 ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/diary?page=${page - 1}`}
-              >
-                Previous
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-            {hasMore ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/diary?page=${page + 1}`}
-              >
-                Next
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-          </nav>
+          <Pagination
+            page={page}
+            hasMore={hasMore}
+            makeHref={(p) => `/diary?page=${p}`}
+          />
         </>
       )}
     </main>

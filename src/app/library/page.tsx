@@ -9,11 +9,13 @@ import {
   type LibraryStatus,
 } from "@/lib/validation/library";
 import { LibraryEntryCard } from "@/components/library/library-entry-card";
+import { GRID_CLASSES } from "@/components/games/poster-grid";
 import { SortSelect } from "@/components/library/sort-select";
 import { IgdbAttribution } from "@/components/games/igdb-attribution";
 import { EmptyState } from "@/components/common/empty-state";
 import { LinkButton } from "@/components/common/link-button";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
+import { Pagination } from "@/components/common/pagination";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Library" };
@@ -86,9 +88,7 @@ export default async function LibraryPage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Library
-      </Heading>
+      <PageHeader title="Library" />
 
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <nav
@@ -126,38 +126,16 @@ export default async function LibraryPage({ searchParams }: Props) {
         />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <div className={GRID_CLASSES}>
             {entries.map((entry) => (
               <LibraryEntryCard key={entry.gameId} entry={entry} />
             ))}
           </div>
-          <nav
-            className="mt-8 flex items-center justify-between"
-            aria-label="Pagination"
-          >
-            {page > 1 ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={libraryHref(status, sort, page - 1)}
-              >
-                Previous
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-            {hasMore ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={libraryHref(status, sort, page + 1)}
-              >
-                Next
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-          </nav>
+          <Pagination
+            page={page}
+            hasMore={hasMore}
+            makeHref={(p) => libraryHref(status, sort, p)}
+          />
         </>
       )}
 

@@ -3,25 +3,222 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-12 (Prompt 7 — Pinecone semantic search —
-**semantic search half complete and fully manually verified.** The user
-ran `npm run pinecone:bootstrap` and confirmed success (index
-`savepoint-games`, namespace `games`, model `llama-text-embed-v2`,
-deletion protection enabled). Phase B then ran against the real index: a
-read-only compatibility check, a bounded 5-game backfill (5 synced, 0
-failed), the three-query smoke test (15 hits, 0 failures, every hit
-resolved to a genuine Supabase `games` row), and the user's own manual
-browser check — **every item passed.** Manual testing also surfaced an
-expected coverage limitation, not a defect: semantic search only covers
-games already imported into Supabase and synced to Pinecone (currently the
-5 backfilled games), not the wider IGDB catalogue — see "Prompt 7 — Phase
-B" below and [PINECONE.md](./PINECONE.md) for full detail. **Recommendations
-and `recommendation_feedback` remain explicitly out of scope, not
-started.** No migration needed or created — `game_vector_sync` has existed
-since migration 6 with exactly the shape the sync pipeline needs. Prompt 5
-— lists, social & profiles — remains **complete and fully manually
-verified**; Prompt 4 — core tracking — remains **complete and fully
-manually verified**; both histories are preserved below unchanged.)._
+_Last updated: 2026-08-12 (Prompt 8 — design, responsive layout &
+accessibility pass — **complete, automated-checks-clean, and fully
+manually verified by the user, including a post-completion fix.** Retuned
+design tokens (elevation surfaces, solid borders, a targeted
+`prefers-reduced-motion` rule), added a mobile nav (bottom tab bar +
+drawer, built on `@base-ui/react`'s previously-unused `Drawer` primitive),
+consolidated duplicated page-header/pagination/poster-grid markup into
+shared components, swept all 25 routes for spacing/responsive consistency,
+and fixed a batch of real accessibility gaps found during the pass
+(spoiler-reveal semantics, two missing form labels, one icon-button
+accessible-name regression risk). New [DESIGN.md](./DESIGN.md) records the
+token/component/a11y conventions. The user's full manual browser
+checklist then passed every item, and separately surfaced one real gap —
+semantic search worked at `/search?mode=semantic` but had no discoverable
+route from the visible navigation — fixed with an "Open full search" link
+in the ⌘K dialog (mentions both Standard and Semantic modes, preserves and
+URL-encodes any in-progress query, closes on navigation, Tab-reachable),
+covered by 8 new regression tests, and **re-verified by the user as
+passing.** See "Prompt 8" below for full detail. Prompt 7 — Pinecone
+semantic search — remains **semantic search half complete and fully
+manually verified**; Prompt 5 — lists, social & profiles — remains
+**complete and fully manually verified**; Prompt 4 — core tracking —
+remains **complete and fully manually verified**; all three histories are
+preserved below unchanged.)._
+
+## Prompt 8 — Design, responsive layout & accessibility pass
+
+Full architecture and conventions live in [DESIGN.md](./DESIGN.md); this
+section tracks completion status only. Scope: a design/responsive/
+accessibility pass over the existing app — no product scope changed, no
+new pages, no Recommendations work.
+
+**Design tokens** (`src/app/globals.css`): retuned the OKLCH neutral
+palette against real hex targets (converted with an actual OKLCH
+conversion, not eyeballed) — a new `--surface-1` elevation step, `--card`/
+`--popover` redefined as `--surface-2`, `--border`/`--input` switched from
+alpha-white to solid, `--border-subtle` kept for on-artwork overlays.
+Collapsed the byte-identical `:root`/`.dark` duplication (dark-first, no
+light theme exists). Added a semantic motion-duration scale and a
+**targeted** `prefers-reduced-motion` rule — it does not blanket-zero every
+animation; `.animate-spin` (the two real functional spinners in
+`submit-button.tsx`/`add-game-to-list-dialog.tsx`) is explicitly exempt so
+in-progress indicators keep visibly indicating progress, and transitions
+stay at a real (if short) non-zero duration so Base UI's Dialog/Drawer
+open/close lifecycle still observes a genuine transition.
+
+**Mobile navigation** (new): `src/components/ui/drawer.tsx` wraps
+`@base-ui/react/drawer` (already a dependency, previously unused — no new
+package). Its exact API was verified against the installed `.d.ts` files
+rather than assumed — there is no `side` prop (direction is
+`swipeDirection`), and `Popup` must render inside `Viewport` or touch
+scroll-locking/swipe handling silently breaks (a real defect the test
+suite itself caught via a Base UI console warning, then fixed). Focus
+trap, focus-on-open, focus-return-on-close, Escape-close, backdrop-click-
+close, and scroll-lock are all confirmed by real tests in
+`drawer.test.tsx`, not assumed. `MobileNavBar` (fixed bottom tab bar, 5
+primary signed-in destinations) and `MobileNavDrawer` (hamburger →
+Community/Profile/Settings/Sign-out) are new; both receive `user`/
+`username` as props from `site-header.tsx`'s single existing Supabase
+fetch — no duplicate auth queries. Bottom-bar spacing is reserved via a
+`body:has([data-mobile-nav-bar])` CSS rule scoped to the mobile media
+query, so it self-cancels on desktop and never applies on signed-out pages
+that don't render the bar. **A real composition bug was found and fixed
+during testing**: composing nav links via `DrawerClose`'s `render` prop
+forces `role="button"` onto the composed `<Link>` regardless of the
+`nativeButton` flag, breaking real link semantics — the same trap
+`link-button.tsx`'s own comment already documents for Base UI's `Button`.
+Fixed by using a controlled `Drawer` with plain `<Link onClick={() =>
+setOpen(false)}>` elements instead.
+
+**Shared primitives** (new): `PageHeader` and `Pagination`
+(`src/components/common/`) replace duplicated markup across ~14 routes;
+`poster-grid.tsx` now exports `GRID_CLASSES` for the two routes that render
+a different card component in the same grid shape.
+
+**State-file audit**: reviewed all 7 existing `loading.tsx` files and both
+Suspense-fallback call sites (`discover/community`, `search`) — all
+already shape-matched their real content, no changes needed. Added 2 new
+`loading.tsx` files for real latency-risk gaps: `/games/[slug]` (an
+on-demand IGDB fetch on a cache miss) and the `/users/[username]` overview
+tab (the one profile tab without one, despite the same `Promise.all`-of-
+Supabase-queries latency profile as its 6 siblings, each of which already
+had one). `error.tsx`/`not-found.tsx` (×3) confirmed already token-driven
+and honestly worded — no changes needed.
+
+**Route sweep**: wired `PageHeader`/`Pagination`/`GRID_CLASSES` into
+`/home`, `/discover`, `/discover/community`, `/search`, `/diary`,
+`/library`, `/lists/new`, `/settings/profile`, and all six
+`/users/[username]/*` tabs. Added `scroll-fade-x` (an existing, previously
+unused Tailwind v4 utility) to `ProfileNav`'s already-scrollable tab bar.
+Spot-checked `/games/[slug]`, `/reviews/[id]`, `/lists/[id]`,
+`/lists/[id]/edit`, the `(auth)` pages, and `/onboarding` for nested-
+interactive-control and spacing issues — none found; those routes' custom
+header shapes were intentionally left as-is (a badge next to a title, an
+avatar+stats grid, a centered auth card don't fit `PageHeader`'s plain
+shape).
+
+**Accessibility fixes found and made this pass**:
+
+- Spoiler reveal (`review-card.tsx`): the reveal button now has
+  `aria-expanded`/`aria-controls`, and the container is `aria-live="polite"`
+  so screen readers announce the body's appearance — neither existed
+  before.
+- `avatar-uploader.tsx`: the client-side file-validation error rendered as
+  a bare, unassociated `<p>` — now a real `FieldError` wired via
+  `aria-describedby`/`aria-invalid`.
+- `list-item-row.tsx`: the per-item note `<Textarea>` had no label at all
+  (placeholder-only) — added a real `sr-only` label.
+- `search-command-dialog.tsx`: the ⌘K trigger lost its only accessible
+  name below `sm:` (its label text is `hidden` at that breakpoint, which
+  removes it from the accessible tree) — fixed with an explicit
+  `aria-label`.
+- Touch targets: audited against a real ≥44×44px (primary mobile
+  controls) / ≥24×24px (everything else, WCAG 2.2 SC 2.5.8) floor — no
+  overlapping pseudo-element hit-area tricks. `reorder-controls.tsx`
+  already complied (28px `icon-sm` buttons); the new mobile-nav controls
+  were built to comply from the start.
+- Destructive-action confirmation: confirmed `DeleteListButton`/
+  `DeleteDiaryEntryButton`/review deletion (via `review-composer.tsx`) all
+  already use the same `Dialog`-confirm pattern — no gap found.
+
+**Testing**: `vitest-axe` (`^0.1.0`) added as a devDependency — real
+axe-core scans wired into `drawer.test.tsx`, `mobile-nav-bar.test.tsx`,
+`mobile-nav-drawer.test.tsx`, `page-header.test.tsx`, `pagination.test.tsx`,
+`star-rating-input.test.tsx`, plus 2 spot-checks on existing tests
+(`log-diary-entry-dialog.test.tsx`, `empty-state.test.tsx`) — not
+blanket-added everywhere. **Its `toHaveNoViolations()` matcher's type
+declarations don't work against this project's Vitest 4** (confirmed by
+an isolated repro, not assumed from the version number — the matcher
+augments a pre-Vitest-4 global namespace that no longer merges with
+Vitest 4's actual `Assertion<T>` interface). `src/test/axe.ts` exports a
+small, fully-typed `expectNoAxeViolations()` helper built directly on the
+raw `axe-core` results instead; every axe test in this repo uses that, not
+the matcher. One genuinely racy test assertion was found and fixed during
+verification (`drawer.test.tsx`'s "moves focus into the popup on open"
+flaked under concurrent test-file load, not in isolation) — wrapped in
+`waitFor()`, matching the codebase's existing convention for this class of
+timing assertion.
+
+**Automated verification**: `npm run lint` (0 errors), `npm run typecheck`
+(clean), `npm test` (**454/454**, 61 files — up from 444 before this
+pass), `npm run format:check` (clean, after one `npm run format` pass),
+`npm run build`, and `npm run verify-standalone` — full results in
+"Verification" below.
+
+**Manual browser verification (performed by the user, passed).** The
+browser preview tool was unavailable to the assistant for the entire
+implementation session (navigation and screenshot calls both failed with
+"the Browser pane is not displayed"), so every fix above was verified
+through source review and real automated tests (including the ones that
+caught the `Drawer.Viewport` and `DrawerClose`-`render`-prop defects) —
+nothing was visually inspected in-session. The user then personally ran
+the full manual checklist against the real app and confirmed every item
+passed:
+
+- Responsive layouts checked at 360px, 768px, 1024px, and 1440px.
+- Signed-in and signed-out navigation states both work correctly.
+- The mobile bottom navigation and hamburger drawer both work correctly.
+- No content is obscured by the bottom navigation.
+- No unexpected horizontal overflow at any of the checked widths.
+- Keyboard navigation, Drawer/Dialog focus trapping, Escape-to-close, and
+  focus-return all work.
+- Star-rating keyboard interaction and spoiler reveal both work.
+- Form labels, errors, and pending states spot-checked — correct.
+- `prefers-reduced-motion` preserves functional drawers, dialogs, and
+  progress indicators (matching the targeted, non-blanket rule design
+  above).
+- No new browser-console or hydration errors observed.
+
+**Post-completion fix: semantic-search discoverability (this pass).** The
+user's manual pass surfaced one real gap: semantic search worked at
+`/search?mode=semantic`, but nothing in the visible navigation — desktop
+or mobile — offered a route to the full `/search` page (and its
+Standard/Semantic toggle) short of typing the URL by hand. Fixed with the
+smallest change that closes the gap: `search-command-dialog.tsx`'s ⌘K
+dialog gained an **"Open full search"** link at the bottom of its results
+panel, labelled to mention both search modes ("Standard & Semantic"), so
+the destination and its capabilities are discoverable before the page even
+opens. It's a real `<Link>` (not a mouse-only affordance) — Tab-reachable
+right after the search input — with `href` set to `/search` or
+`/search?q=<query>` (URL-encoded) depending on whether anything was
+typed, so an in-progress search carries over instead of being lost. It
+closes the dialog on click so it doesn't linger open over `/search` (the
+same fix pattern already used for the mobile nav drawer). The mobile
+bottom nav's existing "Search" tab needed no change; because the ⌘K
+dialog itself is visible in the header at every viewport for both
+signed-in and signed-out visitors, this same fix also closes the gap for
+signed-out mobile users, who have no bottom tab bar at all. No change to
+Pinecone, IGDB, indexing, ranking, or `/search`'s own architecture — the
+existing Standard/Semantic toggle and its behavior are untouched, only the
+path _to_ it changed.
+
+Eight new regression tests in `search-command-dialog.test.tsx` cover: the
+link's href with no query and with a query, URL-encoding of special
+characters, trimming a whitespace-only query back to plain `/search`,
+Tab-reachability, the "Standard & Semantic" wording surfacing in the
+link's accessible name, the dialog closing on click, and that the existing
+Enter-to-jump-straight-to-a-game quick-search path is unchanged. `npm run
+lint` (0 errors, same 4 pre-existing warnings), `npm run typecheck`
+(clean), `npm test` (**462/462**, 61 files — up from 454), `npm run
+format:check` (clean), `npm run build` (all 29 routes), and `npm run
+verify-standalone` (5/5) all re-run clean after this fix.
+
+**Manual re-verification (performed by the user, passed)**: "Open full
+search" is clearly visible in the global search dialog; its accessible
+wording mentions Standard and Semantic search; entered queries are
+preserved and URL-encoded when opening `/search`; the dialog closes after
+navigation; the action works with keyboard-only navigation via Tab and
+Enter; the existing Enter-to-open-game behaviour still works; the mobile
+Search navigation still reaches `/search`; the Standard/Semantic toggle is
+visible on arrival and semantic search returns the currently indexed
+Savepoint games; no new browser-console or hydration errors appeared.
+
+**Prompt 8 is complete — nothing about it is outstanding, including the
+semantic-search discoverability gap found and fixed during manual
+verification.**
 
 ## Prompt 7 — Phase A (this pass, implementation complete)
 
@@ -766,6 +963,18 @@ manual verification is complete.
 real email delivery, real PKCE code exchange, real Storage uploads — see
 [AUTH.md](./AUTH.md#manual-integration-checklist), already passed.
 
+**Prompt 8 (design/responsive/accessibility pass, this pass)**: `npm run
+lint` (0 errors), `npm run typecheck` (clean), `npm test` (**454/454**, 61
+files — up from 444), `npm run format:check` (clean), `npm run build`, and
+`npm run verify-standalone` all re-run clean after every change in this
+pass — full detail under "Prompt 8" above. **The user then personally ran
+the full manual browser checklist — every item passed** — and separately
+surfaced a semantic-search discoverability gap, fixed with an "Open full
+search" link in the ⌘K dialog and 8 new regression tests; all automated
+checks re-ran clean afterward (`npm test` **462/462**, 61 files), and **the
+user re-verified the fix in the browser — every item passed.** Prompt 8 is
+complete; nothing about it is outstanding.
+
 ## Next up
 
 **Prompt 4 is complete and closed.** Implemented, automated-checks-clean,
@@ -812,3 +1021,31 @@ backfill. Lexical search is unaffected.
 **Recommendations and reasons, and `recommendation_feedback`, are
 explicitly not started** — deferred to a later pass. Nothing else about
 the semantic search half of Prompt 7 is outstanding.
+
+**Prompt 8 — design, responsive layout & accessibility pass — complete.**
+See "Prompt 8" above for full detail on what changed. Automated checks
+were clean throughout; the browser preview tool was unavailable to the
+assistant for the implementation session, so the user personally ran the
+full manual browser checklist afterward — **every item passed**
+(responsive layouts at 360/768/1024/1440px, signed-in/signed-out
+navigation, the mobile bottom nav and hamburger drawer, no content
+obscured by the bottom bar, no horizontal overflow, keyboard navigation
+and focus trapping/Escape/focus-return, star-rating keyboard interaction,
+spoiler reveal, form labels/errors/pending states, reduced-motion
+behaviour preserving functional drawers/dialogs/progress indicators, and
+no new console/hydration errors).
+
+That pass also surfaced one real gap: semantic search had no discoverable
+route from the visible navigation. Fixed with an "Open full search" link
+in the ⌘K dialog (mentions both Standard and Semantic modes, preserves and
+URL-encodes any in-progress query, closes on navigation, Tab-reachable),
+covered by 8 new regression tests, all automated checks re-run clean
+(**462/462**), and **the user re-verified the fix in the browser — every
+item passed** (link visible and clearly labelled, accessible wording
+mentions both modes, query preserved/encoded, dialog closes on
+navigation, keyboard-only Tab+Enter works, existing Enter-to-open-game
+behaviour unchanged, mobile Search nav still reaches `/search`, the
+Standard/Semantic toggle is visible with semantic search returning the
+currently indexed games, no new console/hydration errors).
+
+Nothing about Prompt 8 is outstanding.

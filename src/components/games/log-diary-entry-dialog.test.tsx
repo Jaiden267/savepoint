@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
+import { expectNoAxeViolations } from "@/test/axe";
 
 const { mockLogDiaryEntryAction, mockUpdateDiaryEntryAction } = vi.hoisted(
   () => ({
@@ -134,5 +136,20 @@ describe("LogDiaryEntryDialog", () => {
         "Visible to anyone who views your diary or this game — not private.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("has no axe violations while open (spot-check: a real multi-field form inside a Dialog)", async () => {
+    const user = userEvent.setup();
+    render(
+      <LogDiaryEntryDialog
+        gameId={gameId}
+        gameSlug={gameSlug}
+        triggerLabel="Log play"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Log play" }));
+
+    expectNoAxeViolations(await axe(document.body));
   });
 });

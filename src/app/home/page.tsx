@@ -6,7 +6,7 @@ import { getHomeFeed } from "@/server/services/activity-feed";
 import { FeedItemCard } from "@/components/activity/feed-item";
 import { EmptyState } from "@/components/common/empty-state";
 import { LinkButton } from "@/components/common/link-button";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
 
 export const metadata: Metadata = { title: "Home" };
 
@@ -33,9 +33,7 @@ export default async function HomePage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-2xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Home
-      </Heading>
+      <PageHeader title="Home" />
 
       {items.length === 0 && isFirstPage ? (
         <EmptyState

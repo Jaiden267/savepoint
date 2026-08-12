@@ -10,6 +10,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { SearchIcon } from "lucide-react";
 import {
   Dialog,
@@ -136,13 +137,16 @@ export function SearchCommandDialog() {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger
+        aria-label="Search games"
         className={cn(
           buttonVariants({ variant: "ghost", size: "sm" }),
           "gap-1.5",
         )}
       >
         <SearchIcon aria-hidden="true" />
-        <span className="hidden sm:inline">Search games</span>
+        <span className="hidden sm:inline" aria-hidden="true">
+          Search games
+        </span>
         <kbd className="text-muted-foreground ml-1 hidden text-xs sm:inline">
           ⌘K
         </kbd>
@@ -220,6 +224,28 @@ export function SearchCommandDialog() {
               </div>
             ))
           )}
+        </div>
+        <div className="border-border/60 mt-2 border-t pt-2">
+          <Link
+            href={
+              query.trim()
+                ? `/search?q=${encodeURIComponent(query.trim())}`
+                : "/search"
+            }
+            onClick={() => handleOpenChange(false)}
+            className="hover:bg-muted/60 flex items-center justify-between gap-2 rounded-md px-2 py-2 text-sm font-medium"
+          >
+            <span className="flex items-center gap-2">
+              <SearchIcon
+                className="text-muted-foreground size-4 shrink-0"
+                aria-hidden="true"
+              />
+              Open full search
+            </span>
+            <span className="text-muted-foreground text-xs">
+              Standard &amp; Semantic
+            </span>
+          </Link>
         </div>
       </DialogPopup>
     </Dialog>

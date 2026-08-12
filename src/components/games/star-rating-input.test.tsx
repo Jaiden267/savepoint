@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "vitest-axe";
+import { expectNoAxeViolations } from "@/test/axe";
 import { useState } from "react";
 import { StarRatingInput } from "./star-rating-input";
 
@@ -113,5 +115,15 @@ describe("StarRatingInput — focus-visible", () => {
 
     const label = screen.getByText("3 stars").closest("label");
     expect(label?.className).toContain("peer-focus-visible:ring-2");
+  });
+});
+
+describe("StarRatingInput — accessibility", () => {
+  it("has no axe violations", async () => {
+    const { container } = render(
+      <StarRatingInput aria-label="Your rating" name="rating" />,
+    );
+
+    expectNoAxeViolations(await axe(container));
   });
 });

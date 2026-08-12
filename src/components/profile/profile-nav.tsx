@@ -24,7 +24,7 @@ export function ProfileNav({ username }: ProfileNavProps) {
   return (
     <nav
       aria-label="Profile sections"
-      className="border-border mt-8 flex gap-1 overflow-x-auto border-b"
+      className="border-border scroll-fade-x mt-8 flex gap-1 overflow-x-auto border-b"
     >
       {TABS.map((tab) => {
         const href = `${base}${tab.segment}`;

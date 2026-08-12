@@ -9,7 +9,7 @@ import { getClientIdentifier } from "@/lib/auth/request-ip";
 import { PosterGrid, PosterGridSkeleton } from "@/components/games/poster-grid";
 import { IgdbAttribution } from "@/components/games/igdb-attribution";
 import { EmptyState } from "@/components/common/empty-state";
-import { Heading } from "@/components/common/typography";
+import { PageHeader } from "@/components/common/page-header";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Search" };
@@ -38,9 +38,7 @@ export default async function SearchPage({ searchParams }: Props) {
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10">
-      <Heading level="h3" as="h1" className="mb-6">
-        Search
-      </Heading>
+      <PageHeader title="Search" />
 
       {query ? (
         <nav

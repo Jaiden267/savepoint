@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { SubmitButton } from "@/components/common/submit-button";
 import { FormAlert } from "@/components/common/form-alert";
+import { FieldError } from "@/components/common/field-error";
 
 export function AvatarUploader({
   avatarUrl,
@@ -80,6 +81,10 @@ export function AvatarUploader({
             className="sr-only"
             id="avatar-input"
             aria-label="Upload avatar image"
+            aria-describedby={
+              clientError ? "avatar-help avatar-error" : "avatar-help"
+            }
+            aria-invalid={clientError ? true : undefined}
           />
         </form>
         <div className="flex items-center gap-2">
@@ -100,12 +105,13 @@ export function AvatarUploader({
             />
           ) : null}
         </div>
-        <p className="text-muted-foreground text-xs">
+        <p id="avatar-help" className="text-muted-foreground text-xs">
           PNG, JPEG or WebP. Max 5MB.
         </p>
-        {clientError ? (
-          <p className="text-destructive text-xs">{clientError}</p>
-        ) : null}
+        <FieldError
+          id="avatar-error"
+          errors={clientError ? [clientError] : undefined}
+        />
         <FormAlert state={uploadState} />
         <FormAlert state={removeState} />
       </div>

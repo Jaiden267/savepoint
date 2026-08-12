@@ -4,8 +4,9 @@ import { LibraryBig } from "lucide-react";
 import { getProfileByUsername } from "@/server/services/profile";
 import { listUserLibrary } from "@/server/services/library";
 import { PosterCard } from "@/components/games/poster-card";
+import { GRID_CLASSES } from "@/components/games/poster-grid";
 import { EmptyState } from "@/components/common/empty-state";
-import { LinkButton } from "@/components/common/link-button";
+import { Pagination } from "@/components/common/pagination";
 
 export const metadata: Metadata = { title: "Library" };
 
@@ -47,7 +48,7 @@ export default async function ProfileLibraryPage({
         <EmptyState icon={LibraryBig} title="No games in this library yet" />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <div className={GRID_CLASSES}>
             {entries.map((entry) => (
               <div key={entry.gameId} className="flex flex-col gap-1">
                 <PosterCard
@@ -65,33 +66,11 @@ export default async function ProfileLibraryPage({
               </div>
             ))}
           </div>
-          <nav
-            className="mt-8 flex items-center justify-between"
-            aria-label="Pagination"
-          >
-            {page > 1 ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/users/${username}/library?page=${page - 1}`}
-              >
-                Previous
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-            {hasMore ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/users/${username}/library?page=${page + 1}`}
-              >
-                Next
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-          </nav>
+          <Pagination
+            page={page}
+            hasMore={hasMore}
+            makeHref={(p) => `/users/${username}/library?page=${p}`}
+          />
         </>
       )}
     </div>

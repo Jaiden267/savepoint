@@ -7,6 +7,7 @@ import { getProfileLists } from "@/server/services/lists";
 import { ListCard } from "@/components/lists/list-card";
 import { EmptyState } from "@/components/common/empty-state";
 import { LinkButton } from "@/components/common/link-button";
+import { Pagination } from "@/components/common/pagination";
 
 export const metadata: Metadata = { title: "Lists" };
 
@@ -77,33 +78,11 @@ export default async function ProfileListsPage({
               />
             ))}
           </div>
-          <nav
-            className="mt-8 flex items-center justify-between"
-            aria-label="Pagination"
-          >
-            {page > 1 ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/users/${username}/lists?page=${page - 1}`}
-              >
-                Previous
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-            {hasMore ? (
-              <LinkButton
-                variant="secondary"
-                size="sm"
-                href={`/users/${username}/lists?page=${page + 1}`}
-              >
-                Next
-              </LinkButton>
-            ) : (
-              <span />
-            )}
-          </nav>
+          <Pagination
+            page={page}
+            hasMore={hasMore}
+            makeHref={(p) => `/users/${username}/lists?page=${p}`}
+          />
         </>
       )}
     </div>

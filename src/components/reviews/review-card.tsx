@@ -1,6 +1,6 @@
 "use client";
 
-import { useOptimistic, useState, useTransition } from "react";
+import { useId, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { Heart, Lock } from "lucide-react";
 import { toggleReviewLikeAction } from "@/server/actions/reviews";
@@ -64,6 +64,7 @@ export function ReviewCard({
   className,
 }: ReviewCardProps) {
   const [revealed, setRevealed] = useState(false);
+  const bodyId = useId();
   const [isPending, startTransition] = useTransition();
   const [optimisticLike, setOptimisticLike] = useOptimistic({
     liked: viewerHasLiked,
@@ -135,19 +136,24 @@ export function ReviewCard({
         </Badge>
       ) : null}
 
-      <div className="mt-2">
+      <div className="mt-2" aria-live="polite">
         {showSpoilerGate ? (
           <Button
             type="button"
             variant="secondary"
             size="sm"
+            aria-expanded={false}
+            aria-controls={bodyId}
             onClick={() => setRevealed(true)}
           >
             <Lock aria-hidden="true" />
             Contains spoilers — click to reveal
           </Button>
         ) : (
-          <p className="text-foreground text-sm whitespace-pre-wrap">
+          <p
+            id={bodyId}
+            className="text-foreground text-sm whitespace-pre-wrap"
+          >
             {review.body}
           </p>
         )}

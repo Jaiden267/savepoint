@@ -1,6 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
+// Accessibility test assertions use src/test/axe.ts's expectNoAxeViolations
+// helper rather than vitest-axe's own toHaveNoViolations() matcher — that
+// matcher's type declarations target a pre-Vitest-4 global namespace that
+// doesn't merge with this project's Vitest 4, confirmed by an isolated
+// repro (see src/test/axe.ts for detail). vitest-axe is still used for its
+// `axe()` scan runner, which has no such type issue.
+
 // "server-only" throws unconditionally when imported outside Next's own
 // bundler (which special-cases it to a no-op on the server, and an error
 // only in a client bundle). Stub it to a no-op here so server-only modules

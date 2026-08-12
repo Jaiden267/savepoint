@@ -7,6 +7,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-border-subtle: var(--border-subtle);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
   --font-heading: var(--font-sans);
@@ -55,28 +61,38 @@
 
 /*
  * Savepoint theme — dark-first.
- * Near-black page background, slightly lighter charcoal surfaces, subtle grey
- * borders, high-contrast off-white text, muted grey secondary text, and one
- * restrained blue accent for selected states / primary actions. Semantic
- * green / amber / red are reserved for status meaning only. Poster artwork
- * provides most of the colour, so the chrome stays neutral.
+ * Near-black page background, two elevation steps for raised surfaces
+ * (--surface-1 for cards/inputs, --surface-2 for dialogs/drawer/popovers),
+ * solid neutral borders, high-contrast off-white text, muted grey secondary
+ * text, and one restrained blue accent for selected states / primary
+ * actions. Semantic green / amber / red are reserved for status meaning
+ * only. Poster artwork provides most of the colour, so the chrome stays
+ * neutral. Exact neutral values are OKLCH conversions of the design spec's
+ * hex targets (#090a0c background, #111317 surface-1, #17191e surface-2,
+ * #292c33 border, #f4f4f5 foreground, #9ca3af muted-foreground) — see
+ * docs/DESIGN.md.
  *
  * The dark palette lives in :root so the UI is dark without depending on a
- * class; `.dark` mirrors it for components that use the `dark:` variant.
+ * class. There is no light theme and no toggle anywhere in this app — `.dark`
+ * is left empty (rather than a byte-for-byte duplicate of :root) so the
+ * `dark:` variant continues to resolve to the same custom properties by
+ * inheritance without a second place to keep in sync.
  */
 :root {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.97 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.97 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.97 0 0);
+  --background: oklch(0.145 0.005 263.8);
+  --foreground: oklch(0.967 0.001 286.4);
+  --surface-1: oklch(0.186 0.009 264.3);
+  --surface-2: oklch(0.214 0.01 268.2);
+  --card: var(--surface-2);
+  --card-foreground: oklch(0.967 0.001 286.4);
+  --popover: var(--surface-2);
+  --popover-foreground: oklch(0.967 0.001 286.4);
   --primary: oklch(0.55 0.155 258);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.25 0 0);
   --secondary-foreground: oklch(0.97 0 0);
   --muted: oklch(0.25 0 0);
-  --muted-foreground: oklch(0.7 0 0);
+  --muted-foreground: oklch(0.714 0.019 261.3);
   --accent: oklch(0.27 0 0);
   --accent-foreground: oklch(0.97 0 0);
   --destructive: oklch(0.58 0.22 25);
@@ -85,8 +101,9 @@
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.78 0.14 80);
   --warning-foreground: oklch(0.205 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
+  --border: oklch(0.293 0.013 267.1);
+  --border-subtle: oklch(1 0 0 / 10%);
+  --input: oklch(0.293 0.013 267.1);
   --ring: oklch(0.62 0.15 258);
   --chart-1: oklch(0.62 0.15 258);
   --chart-2: oklch(0.62 0.15 150);
@@ -100,47 +117,12 @@
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.27 0 0);
   --sidebar-accent-foreground: oklch(0.97 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: oklch(0.293 0.013 267.1);
   --sidebar-ring: oklch(0.62 0.15 258);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.97 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.97 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.97 0 0);
-  --primary: oklch(0.55 0.155 258);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.25 0 0);
-  --secondary-foreground: oklch(0.97 0 0);
-  --muted: oklch(0.25 0 0);
-  --muted-foreground: oklch(0.7 0 0);
-  --accent: oklch(0.27 0 0);
-  --accent-foreground: oklch(0.97 0 0);
-  --destructive: oklch(0.58 0.22 25);
-  --destructive-foreground: oklch(0.985 0 0);
-  --success: oklch(0.62 0.15 150);
-  --success-foreground: oklch(0.985 0 0);
-  --warning: oklch(0.78 0.14 80);
-  --warning-foreground: oklch(0.205 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.62 0.15 258);
-  --chart-1: oklch(0.62 0.15 258);
-  --chart-2: oklch(0.62 0.15 150);
-  --chart-3: oklch(0.78 0.14 80);
-  --chart-4: oklch(0.58 0.22 25);
-  --chart-5: oklch(0.7 0 0);
-  --sidebar: oklch(0.185 0 0);
-  --sidebar-foreground: oklch(0.97 0 0);
-  --sidebar-primary: oklch(0.55 0.155 258);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.27 0 0);
-  --sidebar-accent-foreground: oklch(0.97 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.62 0.15 258);
+  /* Intentionally empty — dark-first, no light theme exists; see :root. */
 }
 
 @layer base {
@@ -152,5 +134,51 @@
   }
   html {
     @apply font-sans;
+  }
+
+  /*
+   * Reserves space for MobileNavBar's fixed bottom bar so it never covers a
+   * page's trailing content, action, or error state — but only on the
+   * narrow-viewport range where that bar actually renders (it's
+   * `md:hidden`) and only on pages where it's actually present in the tree
+   * (signed-in only; MobileNavBar sets `data-mobile-nav-bar`). Signed-out
+   * pages, and everything at `md` and above, get zero extra padding — no
+   * unexplained gap. `:has()` matches by DOM presence regardless of the
+   * bar's own `display: none` above `md`, so the media query here — not the
+   * bar's own responsive class — is what makes this self-cancel on desktop.
+   * The padding value must stay in sync with the bar's own height
+   * (`h-14` + its safe-area spacer) in mobile-nav-bar.tsx.
+   */
+  @media (max-width: 767px) {
+    body:has([data-mobile-nav-bar]) {
+      padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+    }
+  }
+
+  /*
+   * Targeted, not blanket: shortens transitions/animations and removes
+   * decorative hover transforms, but does not zero everything out.
+   * - `.animate-spin` (submit-button.tsx, add-game-to-list-dialog.tsx) is
+   *   exempt so real "operation in progress" indicators keep visibly
+   *   spinning instead of freezing mid-frame or looking stuck.
+   * - Transitions stay at a real (if short) duration rather than ~0ms so
+   *   Base UI's Dialog/Drawer open/close transition-status tracking still
+   *   observes a genuine transition and completes its lifecycle correctly.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: var(--duration-fast) !important;
+      scroll-behavior: auto !important;
+    }
+
+    *:not(.animate-spin) {
+      animation-duration: var(--duration-fast) !important;
+    }
+
+    *:hover {
+      scale: 1 !important;
+    }
   }
 }

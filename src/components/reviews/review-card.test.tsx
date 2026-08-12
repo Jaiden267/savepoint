@@ -83,6 +83,50 @@ describe("ReviewCard — spoiler interaction", () => {
     expect(screen.getByText("Great game.")).toBeInTheDocument();
   });
 
+  it("marks the reveal button aria-expanded=false and points aria-controls at the (not yet rendered) body", () => {
+    render(
+      <ReviewCard
+        review={{ ...review, hasSpoilers: true }}
+        author={author}
+        likeCount={0}
+        viewerHasLiked={false}
+        canLike={false}
+      />,
+    );
+
+    const revealButton = screen.getByRole("button", {
+      name: /click to reveal/i,
+    });
+    expect(revealButton).toHaveAttribute("aria-expanded", "false");
+    expect(revealButton.getAttribute("aria-controls")).toBeTruthy();
+  });
+
+  it("announces the reveal via an aria-live region — the body's id matches what aria-controls pointed at", async () => {
+    const user = userEvent.setup();
+    render(
+      <ReviewCard
+        review={{ ...review, hasSpoilers: true }}
+        author={author}
+        likeCount={0}
+        viewerHasLiked={false}
+        canLike={false}
+      />,
+    );
+
+    const revealButton = screen.getByRole("button", {
+      name: /click to reveal/i,
+    });
+    const controlsId = revealButton.getAttribute("aria-controls");
+    const liveRegion = revealButton.closest('[aria-live="polite"]');
+    expect(liveRegion).not.toBeNull();
+
+    await user.click(revealButton);
+
+    const body = screen.getByText("Great game.");
+    expect(body).toHaveAttribute("id", controlsId);
+    expect(liveRegion).toContainElement(body);
+  });
+
   it("shows a non-spoiler body immediately, no reveal control", () => {
     render(
       <ReviewCard

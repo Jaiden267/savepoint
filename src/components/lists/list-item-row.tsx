@@ -85,7 +85,11 @@ export function ListItemRow({
           <form action={noteAction} className="flex flex-col gap-1.5">
             <input type="hidden" name="listId" value={listId} />
             <input type="hidden" name="itemId" value={item.id} />
+            <label className="sr-only" htmlFor={`note-${item.id}`}>
+              Note for {item.gameName}
+            </label>
             <Textarea
+              id={`note-${item.id}`}
               name="note"
               rows={2}
               maxLength={1000}

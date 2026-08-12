@@ -56,4 +56,16 @@ fixed — do not renumber later stages when adding work to an earlier one.
       reasons, and `recommendation_feedback`, are not started** — left for
       a later pass, hence this line stays unchecked.
 - [ ] **Prompt 8 — Hardening/deploy**: Playwright e2e, accessibility/contrast
-      pass, Dockerfile, ZimaOS deployment, cron refresh endpoint.
+      pass, Dockerfile, ZimaOS deployment, cron refresh endpoint. **The
+      design/responsive/accessibility portion is complete and fully
+      manually verified**: design tokens, a mobile nav (bottom tab bar +
+      drawer), a route-by-route consistency sweep, and a batch of real
+      accessibility fixes (spoiler-reveal semantics, missing field labels,
+      an icon-button accessible-name gap, touch-target sizing, a targeted
+      `prefers-reduced-motion` rule) — automated checks clean and the
+      user's full manual browser checklist (360/768/1024/1440px,
+      signed-in/out, keyboard, reduced motion) passed every item — see
+      [DESIGN.md](./DESIGN.md) and [PROJECT_STATE.md](./PROJECT_STATE.md).
+      Playwright e2e, the Dockerfile, ZimaOS deployment, and the cron
+      refresh endpoint remain separately deferred and unstarted, hence this
+      line stays unchecked.
