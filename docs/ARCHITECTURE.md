@@ -28,8 +28,8 @@ src/
     env.ts        client-safe env (Zod)
     env.server.ts server-only env (Zod, `server-only` guarded)
     supabase/     client.ts, server.ts, session.ts (user session + RLS), admin.ts (secret key, RLS-bypassing)
-    igdb/         IGDB integration (placeholder until the IGDB milestone)
-    pinecone/     Pinecone integration (placeholder until the Pinecone milestone)
+    igdb/         IGDB integration (built, Prompt 3 — see docs/IGDB.md)
+    pinecone/     Pinecone integration (built, Prompts 7/7C — see docs/PINECONE.md)
     rating.ts     single source of the 1-10 <-> 0.5-5★ conversion
   proxy.ts        session-refresh interceptor (Next's renamed "middleware")
 supabase/
@@ -124,9 +124,10 @@ storing raw IGDB IDs directly, so ratings/reviews/lists have a stable,
 queryable target and IGDB calls stay bounded.
 
 Migrations are committed SQL under `supabase/migrations/` — the source of
-truth. This repo is **not** linked to the remote Supabase project; migrations
-are applied manually via the Supabase SQL Editor until CLI push is explicitly
-approved.
+truth. The repo is now CLI-linked to the remote Supabase project;
+migrations are applied manually by the project owner (`supabase db push`
+or equivalent) — never automatically, and never by a migration file's
+mere presence in the repo.
 
 ## Authentication
 
@@ -162,15 +163,23 @@ only IGDB-touching endpoint reachable from the browser. Imported games are
 marked `pending` in `game_vector_sync` for the future Pinecone milestone to
 pick up — no Pinecone call happens yet.
 
-## Pinecone (placeholder now, built in its milestone)
+## Pinecone (built, Prompts 7/7C — full detail in docs/PINECONE.md)
 
 Integrated-embedding index `savepoint-games` (`PINECONE_INDEX_NAME`), model
 **`llama-text-embed-v2`**, namespace `games`, source text mapped to field
 `text`. On bootstrap: `describe-index` first — if an incompatible index
 already exists, stop and report the conflict; never delete or recreate it.
-Upserts are on-demand (tracked by the `game_vector_sync` table) plus a
-guarded cron for stale re-syncs. Recommendation reasons are generated
-deterministically from rating/genre overlap — no LLM call required.
+Upserts are on-demand (tracked by the `game_vector_sync` table, an
+idempotent lease-guarded sync per game) — semantic search
+(`/search?mode=semantic`) is live. Prompt 7C (infrastructure built, no
+live catalogue indexing run yet — see docs/PINECONE.md) adds a resumable,
+checkpointed system (`igdb_catalogue_sync`/`igdb_catalogue_discovery_
+cursor`/`igdb_catalogue_lease` tables, an atomic `advance_catalogue_
+discovery` RPC) for indexing a broad, curated slice of the IGDB catalogue
+— not just games Savepoint has cached — gated behind separate explicit
+approvals before any real discovery or Pinecone write happens.
+Recommendations and reasons, and `recommendation_feedback`, remain
+explicitly deferred to a later prompt.
 
 ## Testing
 

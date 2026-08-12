@@ -23,7 +23,10 @@
     "verify-standalone": "node scripts/smoke-test-standalone.mts",
     "pinecone:bootstrap": "node scripts/pinecone-bootstrap.mts",
     "pinecone:backfill": "node scripts/pinecone-backfill.mts",
-    "pinecone:smoke-test": "node scripts/pinecone-smoke-test.mts"
+    "pinecone:smoke-test": "node scripts/pinecone-smoke-test.mts",
+    "catalogue:checkpoint-smoke-test": "node scripts/catalogue-checkpoint-smoke-test.mts",
+    "igdb:catalogue-estimate": "node scripts/igdb-catalogue-estimate.mts",
+    "igdb:catalogue-sync": "node scripts/igdb-catalogue-sync.mts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

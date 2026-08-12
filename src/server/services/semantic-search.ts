@@ -2,7 +2,11 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { searchGameIds, PineconeSearchError } from "@/lib/pinecone/search";
+import {
+  searchGameIds,
+  PineconeSearchError,
+  type PineconeHit,
+} from "@/lib/pinecone/search";
 import { PineconeIndexUnavailableError } from "@/lib/pinecone/client";
 import {
   searchLocalGames,
@@ -11,6 +15,7 @@ import {
 import {
   semanticSearchQuerySchema,
   semanticSearchTopKSchema,
+  pineconeCatalogueRecordSchema,
 } from "@/lib/validation/games";
 import type { GameSearchResult } from "@/lib/igdb/types";
 
@@ -23,11 +28,39 @@ export interface SemanticSearchOutcome {
 }
 
 /**
+ * Builds a catalogue-only search result straight from a Pinecone hit's own
+ * (validated) metadata, for a game with no matching Supabase row. Never
+ * carries rating/review/activity data — search results never have, for any
+ * source — and `gameType`/`versionParentIgdbId` are null since Pinecone's
+ * own rank order is used as-is here, never re-ranked the way lexical
+ * results are.
+ */
+function toCatalogueResult(hit: PineconeHit): GameSearchResult | null {
+  const parsed = pineconeCatalogueRecordSchema.safeParse(hit.fields);
+  if (!parsed.success) return null;
+  const record = parsed.data;
+  return {
+    source: "igdb",
+    igdbId: record.igdb_id,
+    slug: record.slug,
+    name: record.name,
+    coverImageId: record.cover_image_id ?? null,
+    releaseYear: record.release_year ?? null,
+    gameType: null,
+    versionParentIgdbId: null,
+  };
+}
+
+/**
  * `supabase` is the caller's request-scoped, RLS-authenticated client
  * (never the admin client, never an internally-constructed/global one) —
  * `games` is public-readable so no elevated access is needed. The Pinecone
- * module (src/lib/pinecone/search.ts) returns ordered ids only; this is the
- * one place that turns those ids back into real Supabase rows.
+ * module (src/lib/pinecone/search.ts) returns ordered hits keyed by
+ * `igdb_id` only; this is the one place that turns those back into
+ * renderable results, either a real Supabase row (the common, already-
+ * cached case) or — new in Prompt 7C — a catalogue-only result built
+ * directly from validated Pinecone metadata for a game Savepoint has never
+ * cached, instead of silently dropping it.
  */
 export async function searchGamesSemantic(
   supabase: SupabaseClient<Database>,
@@ -66,23 +99,42 @@ export async function searchGamesSemantic(
     return { mode: "semantic", results: [] };
   }
 
-  const gameIds = hits.map((hit) => hit.gameId);
+  // Hydrate by igdb_id — a plain integer column, correct regardless of
+  // whether the hit came from a v1 (raw Supabase UUID id) or v2
+  // (`igdb-${igdbId}` id) Pinecone record. Never .in("id", ...): a v2
+  // hit's top-level record id is not a UUID, and passing it into a UUID
+  // column filter would throw a Postgres invalid-input error rather than
+  // gracefully returning no rows.
+  const igdbIds = hits.map((hit) => hit.igdbId);
   const { data: rows } = await supabase
     .from("games")
     .select(
       "id, igdb_id, slug, name, cover_image_id, release_date, igdb_game_type, version_parent_igdb_id",
     )
-    .in("id", gameIds);
+    .in("igdb_id", igdbIds);
 
-  const byId = new Map((rows ?? []).map((row) => [row.id, row]));
+  const byIgdbId = new Map((rows ?? []).map((row) => [row.igdb_id, row]));
 
-  // Re-order to match Pinecone's hit order; drop any id Pinecone returned
-  // that Supabase no longer has (stale-index self-heal — Supabase is
-  // authoritative).
+  // Re-order to match Pinecone's hit order. A hit whose igdb_id has a live
+  // Supabase row renders from that row (unchanged from before); one that
+  // doesn't renders from its own validated Pinecone metadata as a
+  // catalogue-only result instead of being dropped; one that matches
+  // neither is dropped, same fail-safe behaviour as before, just narrowed
+  // to only the cases that still can't be resolved. Deduped by igdb_id
+  // afterward, keeping the first (highest-ranked) occurrence — relevant
+  // during the v1-to-v2 transition window, where a legacy and a
+  // newly-discovered record for the same game could briefly both exist.
+  const seenIgdbIds = new Set<number>();
   const results: GameSearchResult[] = [];
   for (const hit of hits) {
-    const row = byId.get(hit.gameId);
-    if (row) results.push(toSearchResult(row));
+    if (seenIgdbIds.has(hit.igdbId)) continue;
+
+    const row = byIgdbId.get(hit.igdbId);
+    const result = row ? toSearchResult(row) : toCatalogueResult(hit);
+    if (!result) continue;
+
+    seenIgdbIds.add(hit.igdbId);
+    results.push(result);
   }
 
   return { mode: "semantic", results };

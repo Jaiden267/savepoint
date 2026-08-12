@@ -24,6 +24,16 @@ function isStale(igdbSyncedAt: string | null): boolean {
   return Date.now() - new Date(igdbSyncedAt).getTime() > REFRESH_TTL_MS;
 }
 
+/** The on-demand-import abuse-boundary rate limit, shared by getOrImportGameBySlug (below) and importCatalogueGameAction (src/server/actions/games.ts) — same shape, separately-keyed buckets so the two paths' budgets can't cross-exhaust each other. */
+export function checkImportRateLimit(clientId: string) {
+  return checkRateLimit(`game-import:${clientId}`, IMPORT_RATE_LIMIT);
+}
+
+/** Same limit shape as checkImportRateLimit, keyed separately for the catalogue-only import Server Action — see docs/PINECONE.md's on-demand-import-boundary section for why this is a distinct code path rather than reusing /games/[slug]'s GET-triggered import. */
+export function checkCatalogueImportRateLimit(clientId: string) {
+  return checkRateLimit(`catalogue-import:${clientId}`, IMPORT_RATE_LIMIT);
+}
+
 /**
  * The single shared idempotent upsert every import path funnels through.
  * `games.igdb_id` is unique and upserted on conflict, preserving the same
@@ -219,7 +229,7 @@ export async function getOrImportGameBySlug(
     return cached;
   }
 
-  const rate = checkRateLimit(`game-import:${clientId}`, IMPORT_RATE_LIMIT);
+  const rate = checkImportRateLimit(clientId);
   if (!rate.allowed) {
     if (cached) return cached;
     throw new GameImportRateLimitedError();

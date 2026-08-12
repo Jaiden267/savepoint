@@ -61,11 +61,42 @@ const DETAIL_FIELDS = [
   "game_type.id",
   "game_type.type",
   "version_parent",
+  "updated_at",
+].join(",");
+
+/**
+ * Lightweight field set for catalogue discovery/incremental/release-check
+ * scans (Prompt 7C) — deliberately NOT the full DETAIL_FIELDS list, since a
+ * scan page can cover up to 500 rows and only needs enough to evaluate
+ * eligibility (see src/lib/igdb/catalogue-profile.ts) and populate the
+ * ledger. `updated_at` and `total_rating_count` are the two fields this
+ * list adds beyond what SEARCH_FIELDS already has — the former drives
+ * incremental's watermark, the latter drives the "has real engagement"
+ * eligibility filter. Full content fields (summary/genres/platforms/etc.,
+ * needed to actually build a Pinecone record) are fetched separately, in
+ * batches, only for candidates about to be synced — see buildCatalogueDetailBatchQuery.
+ */
+const CATALOGUE_SCAN_FIELDS = [
+  "id",
+  "game_type.id",
+  "game_type.type",
+  "first_release_date",
+  "cover.image_id",
+  "summary",
+  "storyline",
+  "total_rating_count",
+  "updated_at",
 ].join(",");
 
 /** Over-fetch margin so app-side type filtering (ranking.ts) rarely needs a second round-trip after dropping bundle/mod/pack results. */
 const SEARCH_OVERFETCH_MARGIN = 10;
 const SEARCH_OVERFETCH_CAP = 50;
+
+/** IGDB's own page-size ceiling for a single list request. */
+export const CATALOGUE_SCAN_PAGE_LIMIT = 500;
+
+/** Conservative batch size for fetching full DETAIL_FIELDS for many ids in one request — comfortably under IGDB's own limits, keeping response payload size reasonable. */
+export const CATALOGUE_DETAIL_BATCH_LIMIT = 200;
 
 /** Escapes a value for safe interpolation inside an Apicalypse double-quoted string literal. */
 function escapeApicalypseString(value: string): string {
@@ -108,5 +139,53 @@ export function buildDetailBySlugQuery(slug: string): string {
     `fields ${DETAIL_FIELDS};`,
     `where slug = "${safeSlug}";`,
     `limit 1;`,
+  ].join("\n");
+}
+
+/**
+ * Builds a paged catalogue-scan query (discover/incremental/release-check).
+ * `whereClause` is never user input — it's always built by
+ * src/lib/igdb/catalogue-profile.ts from fixed templates with only
+ * validated numeric ids/timestamps interpolated, the same trust boundary
+ * `buildSearchQuery`'s validated search string already relies on. Kept as a
+ * separate builder (not folded into buildSearchQuery) because catalogue
+ * scans use a different field set, no `search` keyword, and an explicit
+ * `sort` clause the text-search path doesn't need.
+ */
+export function buildCatalogueScanQuery(opts: {
+  whereClause: string;
+  sort: string;
+  limit: number;
+}): string {
+  return [
+    `fields ${CATALOGUE_SCAN_FIELDS};`,
+    `where ${opts.whereClause};`,
+    `sort ${opts.sort};`,
+    `limit ${opts.limit};`,
+  ].join("\n");
+}
+
+/**
+ * Builds a bounded count query against `whereClause` (same trust boundary
+ * as buildCatalogueScanQuery) for the Gate B catalogue estimator — IGDB's
+ * `/count` endpoint takes a bare `where` body, no `fields`/`sort`/`limit`.
+ */
+export function buildCatalogueCountQuery(whereClause: string): string {
+  return whereClause ? `where ${whereClause};` : "";
+}
+
+/**
+ * Builds a batched full-detail query for up to CATALOGUE_DETAIL_BATCH_LIMIT
+ * ids at once — used by the `sync` step to fetch everything needed to build
+ * a Pinecone record (summary/genres/platforms/etc.) for candidates that
+ * mostly have no Supabase row yet, reusing the exact same DETAIL_FIELDS/
+ * mapIgdbGameToRow path the on-demand import already trusts.
+ */
+export function buildCatalogueDetailBatchQuery(igdbIds: number[]): string {
+  const idList = igdbIds.join(",");
+  return [
+    `fields ${DETAIL_FIELDS};`,
+    `where id = (${idList});`,
+    `limit ${igdbIds.length};`,
   ].join("\n");
 }

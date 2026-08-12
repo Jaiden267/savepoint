@@ -7,22 +7,23 @@ serves discovery/search/game-detail pages. Read this before touching
 
 ## Architecture
 
-| File                                    | Responsibility                                                                                            |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `src/lib/igdb/types.ts`                 | Raw IGDB response shapes + the normalized `GameSearchResult`/`IgdbGameDetail` types used everywhere else. |
-| `src/lib/igdb/token.ts`                 | Twitch client-credentials flow, in-memory token cache. **`server-only`.**                                 |
-| `src/lib/igdb/rate-limiter.ts`          | Process-wide 4 req/s + 8-concurrent request scheduler. **`server-only`.**                                 |
-| `src/lib/igdb/client.ts`                | Low-level `igdbRequest()` — timeout, bounded retry, typed errors. **`server-only`.**                      |
-| `src/lib/igdb/apicalypse.ts`            | The only place an Apicalypse query string is built. Pure — no secrets.                                    |
-| `src/lib/igdb/normalize.ts`             | Name normalization for matching/ranking. Pure.                                                            |
-| `src/lib/igdb/ranking.ts`               | Type exclusion + relevance ranking. Pure.                                                                 |
-| `src/lib/igdb/mappers.ts`               | Raw IGDB JSON → DB-ready rows / search results. Pure.                                                     |
-| `src/lib/igdb/image-url.ts`             | IGDB CDN URL construction. Pure, safe for Client Components.                                              |
-| `src/lib/igdb/search.ts`                | `searchIgdbGames()` — validates, queries, filters, ranks. **`server-only`.**                              |
-| `src/lib/igdb/detail.ts`                | `fetchIgdbGameByIgdbId()` / `fetchIgdbGameBySlug()` — one request each. **`server-only`.**                |
-| `src/lib/igdb/search-cache.ts`          | 60s in-memory search-result cache. **`server-only`.**                                                     |
-| `src/server/services/game-catalogue.ts` | Read-only: local search, IGDB fallback, discovery listing. Never writes.                                  |
-| `src/server/services/game-sync.ts`      | The only write path — imports via the admin (secret-key) client, plus the `/games/[slug]` abuse boundary. |
+| File                                    | Responsibility                                                                                                                                                                           |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/igdb/types.ts`                 | Raw IGDB response shapes + the normalized `GameSearchResult`/`IgdbGameDetail` types used everywhere else.                                                                                |
+| `src/lib/igdb/token.ts`                 | Twitch client-credentials flow, in-memory token cache. **`server-only`.**                                                                                                                |
+| `src/lib/igdb/rate-limiter.ts`          | Process-wide 4 req/s + 8-concurrent request scheduler. **`server-only`.**                                                                                                                |
+| `src/lib/igdb/client.ts`                | Low-level `igdbRequest()` — timeout, bounded retry, typed errors. **`server-only`.**                                                                                                     |
+| `src/lib/igdb/apicalypse.ts`            | The only place an Apicalypse query string is built. Pure — no secrets.                                                                                                                   |
+| `src/lib/igdb/normalize.ts`             | Name normalization for matching/ranking. Pure.                                                                                                                                           |
+| `src/lib/igdb/ranking.ts`               | Type exclusion + relevance ranking. Pure.                                                                                                                                                |
+| `src/lib/igdb/mappers.ts`               | Raw IGDB JSON → DB-ready rows / search results. Pure.                                                                                                                                    |
+| `src/lib/igdb/image-url.ts`             | IGDB CDN URL construction. Pure, safe for Client Components.                                                                                                                             |
+| `src/lib/igdb/search.ts`                | `searchIgdbGames()` — validates, queries, filters, ranks. **`server-only`.**                                                                                                             |
+| `src/lib/igdb/detail.ts`                | `fetchIgdbGameByIgdbId()` / `fetchIgdbGameBySlug()` — one request each. **`server-only`.**                                                                                               |
+| `src/lib/igdb/search-cache.ts`          | 60s in-memory search-result cache. **`server-only`.**                                                                                                                                    |
+| `src/server/services/game-catalogue.ts` | Read-only: local search, IGDB fallback, discovery listing. Never writes.                                                                                                                 |
+| `src/server/services/game-sync.ts`      | The only write path — imports via the admin (secret-key) client, plus the `/games/[slug]` abuse boundary.                                                                                |
+| `src/lib/igdb/catalogue-profile.ts`     | Prompt 7C: catalogue-profile `where`-clause builders + client-side eligibility predicate. Pure, not `server-only` — see [PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c). |
 
 **Why four of these files are deliberately _not_ `server-only`** (`apicalypse.ts`,
 `normalize.ts`, `ranking.ts`, `mappers.ts`): they're pure functions with zero
@@ -75,22 +76,23 @@ local, paginated, no IGDB involved at all.
 IGDB's `category`/`websites.category` fields are **deprecated** and
 deliberately not used anywhere in this project. Current fields only:
 
-| IGDB field(s) (dot-expanded in one request)                   | `games` column                                                                                                           | Notes                                                                                                                                                                |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                                                          | `igdb_id`                                                                                                                | Unique, upserted on conflict.                                                                                                                                        |
-| `name`, `slug`                                                | `name`, `slug`                                                                                                           |                                                                                                                                                                      |
-| `summary`, `storyline`                                        | `summary`, `storyline`                                                                                                   |                                                                                                                                                                      |
-| `first_release_date` (unix)                                   | `release_date` (date)                                                                                                    |                                                                                                                                                                      |
-| `cover.image_id`                                              | `cover_image_id`                                                                                                         |                                                                                                                                                                      |
-| `screenshots.image_id`, `artworks.image_id`                   | `screenshot_image_ids`, `artwork_image_ids`                                                                              | Capped at 8 each.                                                                                                                                                    |
-| `genres`, `platforms`, `game_modes`, `themes`                 | `genres`/`platforms`/`game_modes`/`themes` tables + `game_genres`/`game_platforms`/`game_game_modes`/`game_themes` joins | IGDB's own numeric id reused as PK.                                                                                                                                  |
-| `keywords.name`                                               | `keywords text[]`                                                                                                        | Capped at 10 — selected, not exhaustive.                                                                                                                             |
-| `involved_companies.company.name` + `.developer`/`.publisher` | `developer_names text[]`, `publisher_names text[]`                                                                       | Split by the boolean flags, capped at 10 each. No companies reference table (no company browse page).                                                                |
-| `rating`, `rating_count`                                      | `igdb_rating`, `igdb_rating_count`                                                                                       | IGDB's community score.                                                                                                                                              |
-| `aggregated_rating`, `aggregated_rating_count`                | `igdb_aggregated_rating`, `igdb_aggregated_rating_count`                                                                 | IGDB's critic score.                                                                                                                                                 |
-| `websites.url`, `websites.type.type`                          | `websites jsonb` (`{type, url}[]`)                                                                                       | Allow-listed types only (see below), capped at 8, http(s)-only URLs.                                                                                                 |
-| `game_type.id`, `game_type.type`                              | `igdb_game_type_id`, `igdb_game_type`                                                                                    | Current replacement for the deprecated `category` enum — a live, data-driven reference (`game_types` endpoint), **not** a closed set — no CHECK enum on this column. |
-| `version_parent`                                              | `version_parent_igdb_id`                                                                                                 | No FK (the parent may never be imported). Ranking/suppression only.                                                                                                  |
+| IGDB field(s) (dot-expanded in one request)                   | `games` column                                                                                                           | Notes                                                                                                                                                                                                        |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                          | `igdb_id`                                                                                                                | Unique, upserted on conflict.                                                                                                                                                                                |
+| `name`, `slug`                                                | `name`, `slug`                                                                                                           |                                                                                                                                                                                                              |
+| `summary`, `storyline`                                        | `summary`, `storyline`                                                                                                   |                                                                                                                                                                                                              |
+| `first_release_date` (unix)                                   | `release_date` (date)                                                                                                    |                                                                                                                                                                                                              |
+| `cover.image_id`                                              | `cover_image_id`                                                                                                         |                                                                                                                                                                                                              |
+| `screenshots.image_id`, `artworks.image_id`                   | `screenshot_image_ids`, `artwork_image_ids`                                                                              | Capped at 8 each.                                                                                                                                                                                            |
+| `genres`, `platforms`, `game_modes`, `themes`                 | `genres`/`platforms`/`game_modes`/`themes` tables + `game_genres`/`game_platforms`/`game_game_modes`/`game_themes` joins | IGDB's own numeric id reused as PK.                                                                                                                                                                          |
+| `keywords.name`                                               | `keywords text[]`                                                                                                        | Capped at 10 — selected, not exhaustive.                                                                                                                                                                     |
+| `involved_companies.company.name` + `.developer`/`.publisher` | `developer_names text[]`, `publisher_names text[]`                                                                       | Split by the boolean flags, capped at 10 each. No companies reference table (no company browse page).                                                                                                        |
+| `rating`, `rating_count`                                      | `igdb_rating`, `igdb_rating_count`                                                                                       | IGDB's community score.                                                                                                                                                                                      |
+| `aggregated_rating`, `aggregated_rating_count`                | `igdb_aggregated_rating`, `igdb_aggregated_rating_count`                                                                 | IGDB's critic score.                                                                                                                                                                                         |
+| `websites.url`, `websites.type.type`                          | `websites jsonb` (`{type, url}[]`)                                                                                       | Allow-listed types only (see below), capped at 8, http(s)-only URLs.                                                                                                                                         |
+| `game_type.id`, `game_type.type`                              | `igdb_game_type_id`, `igdb_game_type`                                                                                    | Current replacement for the deprecated `category` enum — a live, data-driven reference (`game_types` endpoint), **not** a closed set — no CHECK enum on this column.                                         |
+| `version_parent`                                              | `version_parent_igdb_id`                                                                                                 | No FK (the parent may never be imported). Ranking/suppression only.                                                                                                                                          |
+| `updated_at` (unix, Prompt 7C)                                | _(not persisted to `games`)_                                                                                             | Added to `DETAIL_FIELDS` for the catalogue sync's incremental-discovery watermark (see [PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c)) — the on-demand cache path doesn't otherwise use it. |
 
 **Website type allow-list** (matched case-insensitively against
 `websites.type.type`, everything else dropped before it's ever persisted):
@@ -136,6 +138,33 @@ at all (excluded upstream); if a mistagged edition-like entry ever slipped
 through, its type penalty sinks it below every real title at the same match
 tier. An unrelated title like _Zelda's Adventure_ falls to the weakest tier
 and sorts last.
+
+## Catalogue-scan query building (Prompt 7C)
+
+Three new `apicalypse.ts` builders, alongside the original three
+(`buildSearchQuery`/`buildDetailQuery`/`buildDetailBySlugQuery`), for the
+broad catalogue sync (`scripts/igdb-catalogue-sync.mts`,
+`scripts/igdb-catalogue-estimate.mts`) — see
+[PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c) for the
+full discover/incremental/release-check design these support:
+
+- `buildCatalogueScanQuery({whereClause, sort, limit})` — a lightweight
+  field set (`CATALOGUE_SCAN_FIELDS`: id, game_type, first_release_date,
+  cover, summary, storyline, total_rating_count, updated_at) for paging
+  through up to 500 candidates at once — deliberately not the full
+  `DETAIL_FIELDS` list, since a scan page only needs enough to evaluate
+  eligibility, not to build a Pinecone record.
+- `buildCatalogueCountQuery(whereClause)` — IGDB's `/count` endpoint,
+  used by the Gate B estimator.
+- `buildCatalogueDetailBatchQuery(igdbIds)` — batches up to
+  `CATALOGUE_DETAIL_BATCH_LIMIT` (200) ids into one `DETAIL_FIELDS`
+  request, reusing the exact same `mapIgdbGameToRow` path the on-demand
+  import already trusts, for the `sync` step's actual record-building.
+
+Same trust boundary as `buildSearchQuery`'s validated search string:
+`whereClause` is never user input — it's always built by
+`catalogue-profile.ts` from fixed templates with only validated numeric
+ids/timestamps interpolated, never from an HTTP request.
 
 ## Local catalogue & import
 
@@ -240,7 +269,12 @@ Unit/component tests (mocked, part of `npm test`):
 `src/app/api/search/route.test.ts`;
 `src/components/games/poster-card.test.tsx`;
 `src/components/search/search-command-dialog.test.tsx`;
-`src/lib/auth/route-policy.test.ts` (public-route cases). All network calls
-are mocked (`vi.stubGlobal("fetch", ...)`); no live keys are used.
-`npm run igdb:smoke-test` is the only thing that touches the real network,
-and it's deliberately separate.
+`src/lib/auth/route-policy.test.ts` (public-route cases). Prompt 7C adds
+`src/lib/igdb/catalogue-profile.test.ts` (profile filter construction,
+game_type resolution, agreement between the server-side and client-side
+filter representations) and `src/lib/pinecone/catalogue-page-key.test.ts`
+(deterministic idempotency-key construction). All network calls are
+mocked (`vi.stubGlobal("fetch", ...)`); no live keys are used.
+`npm run igdb:smoke-test` and `npm run catalogue:checkpoint-smoke-test`
+are the only things that touch the real network, and they're deliberately
+separate, opt-in scripts.

@@ -290,6 +290,7 @@ export type Database = {
           game_id: string;
           last_attempted_at: string | null;
           last_synced_at: string | null;
+          schema_version: number | null;
           status: string;
           updated_at: string;
         };
@@ -299,6 +300,7 @@ export type Database = {
           game_id: string;
           last_attempted_at?: string | null;
           last_synced_at?: string | null;
+          schema_version?: number | null;
           status?: string;
           updated_at?: string;
         };
@@ -308,6 +310,7 @@ export type Database = {
           game_id?: string;
           last_attempted_at?: string | null;
           last_synced_at?: string | null;
+          schema_version?: number | null;
           status?: string;
           updated_at?: string;
         };
@@ -417,6 +420,108 @@ export type Database = {
           id?: number;
           name?: string;
           slug?: string;
+        };
+        Relationships: [];
+      };
+      igdb_catalogue_discovery_cursor: {
+        Row: {
+          candidates_discovered: number;
+          completed_at: string | null;
+          cursor_name: string;
+          last_applied_page_key: string | null;
+          last_igdb_id: number | null;
+          last_release_check: string | null;
+          last_release_check_igdb_id: number | null;
+          last_updated_at: string | null;
+          last_updated_at_igdb_id: number | null;
+          updated_at: string;
+        };
+        Insert: {
+          candidates_discovered?: number;
+          completed_at?: string | null;
+          cursor_name: string;
+          last_applied_page_key?: string | null;
+          last_igdb_id?: number | null;
+          last_release_check?: string | null;
+          last_release_check_igdb_id?: number | null;
+          last_updated_at?: string | null;
+          last_updated_at_igdb_id?: number | null;
+          updated_at?: string;
+        };
+        Update: {
+          candidates_discovered?: number;
+          completed_at?: string | null;
+          cursor_name?: string;
+          last_applied_page_key?: string | null;
+          last_igdb_id?: number | null;
+          last_release_check?: string | null;
+          last_release_check_igdb_id?: number | null;
+          last_updated_at?: string | null;
+          last_updated_at_igdb_id?: number | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      igdb_catalogue_lease: {
+        Row: {
+          acquired_at: string | null;
+          command: string | null;
+          holder: string | null;
+          id: boolean;
+          lease_until: string | null;
+          token: string | null;
+        };
+        Insert: {
+          acquired_at?: string | null;
+          command?: string | null;
+          holder?: string | null;
+          id?: boolean;
+          lease_until?: string | null;
+          token?: string | null;
+        };
+        Update: {
+          acquired_at?: string | null;
+          command?: string | null;
+          holder?: string | null;
+          id?: boolean;
+          lease_until?: string | null;
+          token?: string | null;
+        };
+        Relationships: [];
+      };
+      igdb_catalogue_sync: {
+        Row: {
+          attempt_count: number;
+          error: string | null;
+          igdb_id: number;
+          igdb_updated_at: string | null;
+          last_attempted_at: string | null;
+          last_synced_at: string | null;
+          profile: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          attempt_count?: number;
+          error?: string | null;
+          igdb_id: number;
+          igdb_updated_at?: string | null;
+          last_attempted_at?: string | null;
+          last_synced_at?: string | null;
+          profile?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          attempt_count?: number;
+          error?: string | null;
+          igdb_id?: number;
+          igdb_updated_at?: string | null;
+          last_attempted_at?: string | null;
+          last_synced_at?: string | null;
+          profile?: string | null;
+          status?: string;
+          updated_at?: string;
         };
         Relationships: [];
       };
@@ -814,6 +919,23 @@ export type Database = {
       };
     };
     Functions: {
+      advance_catalogue_discovery: {
+        Args: {
+          p_candidates?: Json;
+          p_cursor_name: string;
+          p_expected_previous_page_key: string;
+          p_lease_token: string;
+          p_mark_completed?: boolean;
+          p_mark_ineligible?: number[];
+          p_new_last_igdb_id?: number;
+          p_new_last_release_check_igdb_id?: number;
+          p_new_last_release_check_unix?: number;
+          p_new_last_updated_at_igdb_id?: number;
+          p_new_last_updated_at_unix?: number;
+          p_page_key: string;
+        };
+        Returns: Json;
+      };
       reorder_list_items: {
         Args: { p_item_ids: string[]; p_list_id: string };
         Returns: undefined;

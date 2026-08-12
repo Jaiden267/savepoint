@@ -3,9 +3,50 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-12 (Prompt 8 — design, responsive layout &
-accessibility pass — **complete, automated-checks-clean, and fully
-manually verified by the user, including a post-completion fix.** Retuned
+_Last updated: 2026-08-12 (Prompt 7C — broad IGDB catalogue semantic
+indexing, Gates A1/A2/B/C — **infrastructure complete, automated-checks-
+clean, and a real 25-record canary has been indexed. Gates D (bounded
+expansion) and E (full sync) remain pending, each behind a separate
+explicit approval.**
+Gate A1 (migration `20260813120000_add_igdb_catalogue_sync_infrastructure.sql`)
+applied and live-verified by the user. Gate A2 built the resumable,
+checkpointed catalogue-discovery system (three new tables, one atomic
+`advance_catalogue_discovery` RPC, a global fenced lease, per-minute
+Pinecone pacing, mandatory operator ceilings), the Pinecone record schema
+v2 migration path (`igdb-${igdbId}` record ids, `schema_version`-aware
+re-sync), the `igdb_id`-based semantic-search hydration fix, catalogue-
+only search-result rendering with a POST-based import boundary, and two
+new operator scripts. Live-verified: RPC permissions, compare-and-set
+fencing, duplicate-candidate dedup, `xmax`-based counting, and Unix-
+seconds timestamp conversion, via a new opt-in
+`catalogue:checkpoint-smoke-test` script (all test data cleaned up
+afterward, confirmed). Gate B's live estimate confirmed real counts
+(conservative 25,083 / balanced 26,676 / broad 29,237); **balanced was
+chosen**, and the Pinecone org was separately upgraded from Starter to
+**Builder** (10M embedding tokens/month, same 250K/minute passage limit,
+flat-rate/no-overage). Gate C ran a real, bounded 25-record `balanced`
+canary — discovery and sync both completed cleanly at their declared
+ceilings, 25/25 synced with zero failures, zero duplicate `igdb_id`s,
+all records confirmed schema v2 live, and **the user manually
+browser-verified the full flow (semantic search, POST import, real
+metadata with no fabricated data, cache re-hit, keyboard operability, no
+console errors) — all PASS.** Two related ceiling gaps were surfaced and
+fixed: the per-batch check (once between IGDB pages/sync batches, never
+mid-batch) could let a single page/batch overshoot a small `--limit`
+before the next check could stop it. Discovery got a bounded `--page-size`
+flag. `sync` got a stronger fix — a new `selectWithinTokenBudget()`
+(`src/lib/pinecone/token-budget.ts`) now enforces
+`--max-estimated-embedding-tokens` **before every upsert**, trimming a
+batch rather than ever knowingly sending one over the declared ceiling
+(this is what actually happened in the canary: a 25-record batch's
+margined estimate came in ~1.8% over its declared 15,000-token ceiling).
+Regression-tested (7 new tests). 543/543 automated tests pass. See
+"Prompt 7C" below and
+[PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c) for full
+detail, including the Gate C results table. Prompt 8 — design,
+responsive layout & accessibility pass — remains **complete, automated-
+checks-clean, and fully manually verified by the user, including a
+post-completion fix.** Retuned
 design tokens (elevation surfaces, solid borders, a targeted
 `prefers-reduced-motion` rule), added a mobile nav (bottom tab bar +
 drawer, built on `@base-ui/react`'s previously-unused `Drawer` primitive),
@@ -23,10 +64,11 @@ URL-encodes any in-progress query, closes on navigation, Tab-reachable),
 covered by 8 new regression tests, and **re-verified by the user as
 passing.** See "Prompt 8" below for full detail. Prompt 7 — Pinecone
 semantic search — remains **semantic search half complete and fully
-manually verified**; Prompt 5 — lists, social & profiles — remains
-**complete and fully manually verified**; Prompt 4 — core tracking —
-remains **complete and fully manually verified**; all three histories are
-preserved below unchanged.)._
+manually verified** (superseded in scope, not in status, by Prompt 7C
+above); Prompt 5 — lists, social & profiles — remains **complete and
+fully manually verified**; Prompt 4 — core tracking — remains **complete
+and fully manually verified**; all histories are preserved below
+unchanged.)._
 
 ## Prompt 8 — Design, responsive layout & accessibility pass
 
@@ -348,6 +390,91 @@ uncached titles, as before). See
 [PINECONE.md](./PINECONE.md#coverage-cached-games-only-not-the-wider-igdb-catalogue)
 for full detail. Broadening coverage (organic imports over time, or a
 larger backfill/bulk IGDB ingestion) is out of scope for this pass.
+
+## Prompt 7C — Gate A1/A2 (this pass, infrastructure only — no live indexing run)
+
+Expands semantic search from cached-only to a broad, curated IGDB
+catalogue slice. Plan went through four review rounds before approval,
+each round catching real correctness/safety gaps (a UUID-vs-igdb_id
+hydration bug, an incomplete incremental-discovery design, the checkpoint
+RPC's privilege model, a Unix-seconds timestamp-cast bug, missing
+per-minute Pinecone pacing, and others) — see the plan file's own revision
+history for the full account. Full design in
+[PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c); this
+section is the changelog.
+
+**Gate A1** (migration only, stop for manual application): one new file,
+`supabase/migrations/20260813120000_add_igdb_catalogue_sync_infrastructure.sql`
+— `game_vector_sync.schema_version` (additive column), three new tables
+(`igdb_catalogue_discovery_cursor`, `igdb_catalogue_sync`,
+`igdb_catalogue_lease`), the `advance_catalogue_discovery` RPC, and its
+`REVOKE`/`GRANT` statements (service_role only). Applied by the user via
+the linked Supabase CLI and confirmed live in both local and remote
+migration history.
+
+**Gate A2** (after the user confirmed application):
+
+- `src/types/database.ts` regenerated from the linked live project
+  (`supabase gen types typescript --linked`) and reviewed diff-by-diff —
+  exactly the three new tables, the new column, and the RPC's args/return
+  type, nothing else.
+- Live verification (`scripts/catalogue-checkpoint-smoke-test.mts`, new
+  opt-in script, real database, all test data cleaned up afterward and
+  independently re-confirmed clean): anon rejected end-to-end through
+  PostgREST; the real compare-and-set sequence (page A → page B → retry
+  of B is a no-op → a delayed retry of A after B is rejected → a wrong
+  lease token is rejected before any mutation); duplicate-igdb_id-within-
+  one-page dedup; `xmax`-based new-vs-encountered counting; Unix-seconds
+  → `to_timestamp()` round-trip correctness, including two rows sharing
+  an identical timestamp persisting distinctly. All 14 checks passed on
+  the second run (the first run had two assertion bugs in the _test
+  script itself_ — confirmed by the underlying arithmetic — not in the
+  RPC).
+- Core Pinecone modules moved to schema v2: `record-text.ts`
+  (`schema_version`, `igdb_updated_at`, `game_modes`; `game_id` dropped),
+  `sync.ts` (`igdb-${igdbId}` record ids, `schema_version`-aware re-sync
+  so a legacy v1 row self-heals on next touch instead of waiting on the
+  unrelated 14-day content TTL), `search.ts` (`PineconeHit` keyed on
+  `igdbId`, not a Supabase id), `semantic-search.ts` (hydrates by
+  `igdb_id`, never `id` — the fix for a real bug the plan review caught:
+  a v2 record's own top-level id is `igdb-*`, and an `.in("id", ...)`
+  filter against a `uuid` column would throw), plus catalogue-only result
+  rendering and dedupe-by-`igdb_id`.
+- New pure modules: `src/lib/igdb/catalogue-profile.ts` (profile
+  definitions, server-side `where`-clause builders, client-side
+  eligibility predicate — kept in agreement by a dedicated test),
+  `src/lib/pinecone/catalogue-page-key.ts` (deterministic idempotency-key
+  construction from the complete canonical mutation payload),
+  `src/lib/pinecone/lease.ts` (the global fenced lease),
+  `src/lib/pinecone/embed-rate-pacer.ts` (per-minute Pinecone pacing).
+- New operator-run scripts: `scripts/igdb-catalogue-estimate.mts` (Gate
+  B, read-only), `scripts/igdb-catalogue-sync.mts` (`discover`/
+  `incremental`/`release-check`/`sync`/`status`/`verify`, dry-run
+  default, mandatory ceilings on `--execute`, the global lease, SIGINT/
+  SIGTERM with correct exit codes — never 0 for an interruption).
+  Dry-run-tested live against real IGDB/Pinecone reads (no mutation):
+  `status`, `verify`, and `discover --profile balanced` all ran
+  correctly; a `discover --limit 5` dry-run correctly stopped after one
+  page with exit code 0.
+- New POST-based on-demand import boundary for catalogue-only search
+  results: `src/server/actions/games.ts`'s `importCatalogueGameAction`
+  and `src/components/games/catalogue-result-card.tsx`, wired into
+  `/search/page.tsx`'s semantic-mode results — see PINECONE.md for why a
+  plain GET-triggered `<Link>` (the existing, still-correct pattern for
+  lexical fallback results) wasn't extended to this much larger surface.
+- 536/536 tests pass (up from 462), including new coverage for every item
+  above plus a dedicated UUID-vs-igdb_id regression test proving the
+  Postgres invalid-uuid bug class can't occur.
+- Docs updated: this file, [PINECONE.md](./PINECONE.md),
+  [IGDB.md](./IGDB.md), [ARCHITECTURE.md](./ARCHITECTURE.md) (also fixed
+  two pre-existing stale-doc-drift spots: the IGDB/Pinecone "placeholder"
+  language and the "not linked to remote Supabase" line, both outdated
+  since Prompts 3/7 landed), [ROADMAP.md](./ROADMAP.md).
+
+**Not done this pass, by design**: no real IGDB catalogue discovery, no
+Pinecone catalogue upsert, no `--execute` invocation of either new
+script. Gate B (read-only estimate + profile choice) through Gate E (full
+background sync) each require a separate, explicit future approval.
 
 ## Prompt 5 — Phase A (this pass)
 
@@ -1049,3 +1176,40 @@ Standard/Semantic toggle is visible with semantic search returning the
 currently indexed games, no new console/hydration errors).
 
 Nothing about Prompt 8 is outstanding.
+
+**Prompt 7C — broad IGDB catalogue semantic indexing — Gates A1/A2/B/C
+complete.** The migration is applied and live-verified; the full
+resumable/checkpointed discovery system, schema v2 record shape,
+`igdb_id`-based hydration fix, catalogue-only result rendering with its
+POST-based import boundary, and both operator scripts are built and
+unit-tested. See "Prompt 7C" above for the full changelog and
+[PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c) for the
+design.
+
+**Gate B** (read-only candidate-count estimate) ran live: Conservative
+25,083 / **Balanced 26,676 (chosen)** / Broad 29,237. The Pinecone org
+was separately upgraded from Starter to Builder (10M embedding
+tokens/month, unchanged 250K/minute passage limit, flat-rate/no-overage)
+— reflected in PINECONE.md's quota table.
+
+**Gate C** ran a real, bounded 25-record `balanced` canary — see
+[PINECONE.md's Gate C results
+table](./PINECONE.md#gate-c-results--balanced-profile-canary-2026-08-12)
+for exact numbers (25/25 synced, 0 failures, 0 duplicate `igdb_id`s, all
+records confirmed schema v2 live, Pinecone index 9 → 34 records) and the
+user's manual browser-verification results (all PASS). Found and fixed
+two ceiling-granularity gaps: `discover`/`incremental`/`release-check`
+got a `--page-size` flag (a small `--limit` can now be paired with a
+matching scan-page size); `sync` got `selectWithinTokenBudget()`
+(`src/lib/pinecone/token-budget.ts`), enforcing
+`--max-estimated-embedding-tokens` before every upsert instead of only
+between batches — the actual gap that let the canary's single 25-record
+batch land ~1.8% over its declared token ceiling. Discovery cursor
+`discover:balanced:gen1` is paused mid-generation (25 of ~26,676
+candidates scanned, resumable) — not completed, by design, since Gate C
+is capped at 25.
+
+**Gates D** (a user-approved bounded batch, resuming the same cursor)
+**and E** (full background sync) each require their own separate,
+explicit approval, same as before. Nothing about Gates A1/A2/B/C is
+outstanding.

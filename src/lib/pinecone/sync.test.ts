@@ -36,12 +36,17 @@ import {
   PineconeIndexNotBootstrappedError,
   PineconeIndexIncompatibleError,
 } from "./client";
-import { SYNC_LEASE_MS, RETRY_COOLDOWN_MS } from "./constants";
+import {
+  SYNC_LEASE_MS,
+  RETRY_COOLDOWN_MS,
+  PINECONE_SCHEMA_VERSION,
+} from "./constants";
 
 interface GameVectorSyncRow {
   status: string;
   attempt_count: number;
   last_attempted_at: string | null;
+  schema_version: number | null;
 }
 
 /** Every chain method resolves to (or returns something that resolves to) `result` — mirrors src/server/services/game-sync.test.ts's createTableMock convention. */
@@ -122,6 +127,12 @@ function vectorSyncRow(overrides: Partial<GameVectorSyncRow>): {
       status: "pending",
       attempt_count: 0,
       last_attempted_at: null,
+      // Defaults to the current schema version so every pre-existing test
+      // below (none of which are about schema versioning) keeps testing
+      // exactly what it always tested — see the dedicated
+      // "schema-version-aware re-sync" describe block for the new
+      // dimension this field adds.
+      schema_version: PINECONE_SCHEMA_VERSION,
       ...overrides,
     },
   };
@@ -291,6 +302,105 @@ describe("syncGameVector — lease behaviour", () => {
 
     expect(outcome).toEqual({ status: "skipped_concurrent" });
     expect(mockUpsertRecords).not.toHaveBeenCalled();
+  });
+});
+
+describe("syncGameVector — schema-version-aware re-sync (Prompt 7C)", () => {
+  it("re-syncs (does not skip) a 'synced' row with no schema_version — a legacy v1 record self-healing on next touch", async () => {
+    setupAdminFromQueues({
+      game_vector_sync: [
+        vectorSyncRow({
+          status: "synced",
+          attempt_count: 4,
+          schema_version: null,
+        }),
+        { data: [{ game_id: GAME_ID }] },
+        { data: null },
+      ],
+      games: [{ data: GAME_ROW }],
+    });
+
+    const outcome = await syncGameVector(GAME_ID);
+
+    expect(outcome).toEqual({ status: "synced" });
+    expect(mockUpsertRecords).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-syncs a 'synced' row whose schema_version is older than the current constant", async () => {
+    setupAdminFromQueues({
+      game_vector_sync: [
+        vectorSyncRow({
+          status: "synced",
+          attempt_count: 4,
+          schema_version: 1,
+        }),
+        { data: [{ game_id: GAME_ID }] },
+        { data: null },
+      ],
+      games: [{ data: GAME_ROW }],
+    });
+
+    const outcome = await syncGameVector(GAME_ID);
+
+    expect(outcome).toEqual({ status: "synced" });
+    expect(mockUpsertRecords).toHaveBeenCalledTimes(1);
+  });
+
+  it("still skips a 'synced' row whose schema_version already matches the current constant", async () => {
+    setupAdminFromQueues({
+      game_vector_sync: [
+        vectorSyncRow({
+          status: "synced",
+          schema_version: PINECONE_SCHEMA_VERSION,
+        }),
+      ],
+    });
+
+    const outcome = await syncGameVector(GAME_ID);
+
+    expect(outcome).toEqual({ status: "skipped_already_synced" });
+    expect(mockUpsertRecords).not.toHaveBeenCalled();
+  });
+
+  it("stamps schema_version on the finalize write for a successful sync", async () => {
+    const chains = setupAdminFromQueues({
+      game_vector_sync: [
+        vectorSyncRow({
+          status: "pending",
+          attempt_count: 0,
+          schema_version: null,
+        }),
+        { data: [{ game_id: GAME_ID }] },
+        { data: null },
+      ],
+      games: [{ data: GAME_ROW }],
+    });
+
+    await syncGameVector(GAME_ID);
+
+    const finalizeChain = chains.game_vector_sync[2]!;
+    const payload = (finalizeChain.update as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as { schema_version: number };
+    expect(payload.schema_version).toBe(PINECONE_SCHEMA_VERSION);
+  });
+
+  it("upserts under the v2 record id scheme (igdb-${igdbId}), never the raw Supabase UUID", async () => {
+    setupAdminFromQueues({
+      game_vector_sync: [
+        vectorSyncRow({ status: "pending", attempt_count: 0 }),
+        { data: [{ game_id: GAME_ID }] },
+        { data: null },
+      ],
+      games: [{ data: GAME_ROW }],
+    });
+
+    await syncGameVector(GAME_ID);
+
+    const upsertArg = mockUpsertRecords.mock.calls[0]![0] as {
+      records: { id: string }[];
+    };
+    expect(upsertArg.records[0]!.id).toBe(`igdb-${GAME_ROW.igdb_id}`);
+    expect(upsertArg.records[0]!.id).not.toBe(GAME_ID);
   });
 });
 

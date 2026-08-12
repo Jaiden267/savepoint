@@ -14,6 +14,7 @@ import {
   MAX_AUTO_RETRY_ATTEMPTS,
   SYNC_LEASE_MS,
   RETRY_COOLDOWN_MS,
+  PINECONE_SCHEMA_VERSION,
 } from "./constants.ts";
 import type { TablesUpdate } from "@/types/database";
 
@@ -55,7 +56,7 @@ async function runSync(gameId: string): Promise<SyncOutcome> {
 
   const { data: row, error: readError } = await admin
     .from("game_vector_sync")
-    .select("status, attempt_count, last_attempted_at")
+    .select("status, attempt_count, last_attempted_at, schema_version")
     .eq("game_id", gameId)
     .maybeSingle();
 
@@ -76,7 +77,19 @@ async function runSync(gameId: string): Promise<SyncOutcome> {
     ? new Date(row.last_attempted_at).getTime()
     : null;
 
-  if (row.status === "synced") {
+  // A 'synced' row is only skipped if it was ALSO synced under the
+  // current Pinecone record schema — `schema_version` is independent of
+  // IGDB content freshness (the 14-day staleness TTL governs that
+  // separately). A legacy v1 row (schema_version NULL, or an older
+  // version number) is re-synced here, once, on this very call, rather
+  // than being skipped indefinitely — this is how a pre-Prompt-7C record
+  // (raw Supabase-UUID id, no schema_version) migrates onto the v2
+  // scheme on its next real touch, not "eventually" via the unrelated
+  // content-staleness TTL.
+  if (
+    row.status === "synced" &&
+    row.schema_version === PINECONE_SCHEMA_VERSION
+  ) {
     return { status: "skipped_already_synced" };
   }
 
@@ -140,6 +153,7 @@ async function runSync(gameId: string): Promise<SyncOutcome> {
             status: "synced",
             last_synced_at: new Date().toISOString(),
             error: null,
+            schema_version: PINECONE_SCHEMA_VERSION,
           }
         : { status: "failed", error: outcome.error };
 
@@ -182,18 +196,30 @@ async function runSync(gameId: string): Promise<SyncOutcome> {
       themes: refs.themes,
     });
     const fields = buildGameRecordFields({
-      gameId: gameRow.id,
       igdbId: gameRow.igdb_id,
       slug: gameRow.slug,
       name: gameRow.name,
       releaseDate: gameRow.release_date,
       genres: refs.genres,
       platforms: refs.platforms,
+      gameModes: refs.gameModes,
       coverImageId: gameRow.cover_image_id,
+      // The cached `games` row has no column for IGDB's own `updated_at`
+      // (only `igdb_synced_at`, our own sync timestamp) — the on-demand
+      // path doesn't make an extra IGDB call just for this optional
+      // metadata field. A game discovered later by the catalogue sync
+      // gets this populated from its own IGDB detail fetch instead.
+      igdbUpdatedAtUnix: null,
     });
 
+    // v2 record id: `igdb-${igdbId}`, not the raw Supabase UUID — see
+    // docs/PINECONE.md's schema-v2/compatibility section. Search-time
+    // hydration (semantic-search.ts) resolves purely by the `igdb_id`
+    // metadata field, which is present and correctly typed on both v1
+    // and v2 records, so this ID-scheme change is safe to make
+    // unilaterally here without touching the read path at the same time.
     await namespace.upsertRecords({
-      records: [{ id: gameId, text, ...fields }],
+      records: [{ id: `igdb-${gameRow.igdb_id}`, text, ...fields }],
     });
 
     return await finalize({ status: "synced" });

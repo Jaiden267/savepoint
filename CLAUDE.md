@@ -30,26 +30,27 @@ Letterboxd-style social platform for video games. Full architecture:
   query execution.
 - **No `dangerouslySetInnerHTML` for review or user-generated content.**
 - **No fake data or permanent mocks to hide an error.** The IGDB and Pinecone
-  client modules are intentionally unimplemented placeholders right now — they
-  throw a clear error if called rather than returning fabricated data.
+  client modules are real, implemented, live-verified integrations (Prompts
+  3/7/7C) — this rule still applies going forward: on a genuine failure they
+  throw a clear error rather than returning fabricated data.
 - Do not call or mutate Supabase, IGDB, or Pinecone as a side effect of
   routine dev/build/lint/test work in this repo.
 - Do not `git commit` or `git push` unless explicitly asked.
 
 ## Key paths
 
-| Path                                          | What's there                                                                            |
-| --------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `src/app/`                                    | Routes — RSC by default, `"use client"` only for leaf interactive components            |
-| `src/proxy.ts`                                | Session-refresh interceptor (this Next.js version renamed `middleware.ts` → `proxy.ts`) |
-| `src/lib/env.ts` / `env.server.ts`            | Zod-validated env, client-safe vs. server-only                                          |
-| `src/lib/supabase/`                           | `client.ts`, `server.ts`, `session.ts` (user session + RLS), `admin.ts` (secret key)    |
-| `src/lib/igdb/`, `src/lib/pinecone/`          | Server-only integration placeholders — not implemented yet                              |
-| `src/lib/rating.ts`                           | Single source of the 1–10 (DB) ↔ 0.5–5.0★ (UI) conversion                               |
-| `src/components/ui/`                          | shadcn primitives                                                                       |
-| `src/components/common/`, `layout/`, `games/` | Shared foundations (empty/error state, typography, app shell, poster skeleton)          |
-| `supabase/migrations/`                        | Committed SQL migrations — source of truth, **not** linked to any remote project        |
-| `docs/`                                       | Architecture, roadmap, project state, environment contract                              |
+| Path                                          | What's there                                                                                               |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `src/app/`                                    | Routes — RSC by default, `"use client"` only for leaf interactive components                               |
+| `src/proxy.ts`                                | Session-refresh interceptor (this Next.js version renamed `middleware.ts` → `proxy.ts`)                    |
+| `src/lib/env.ts` / `env.server.ts`            | Zod-validated env, client-safe vs. server-only                                                             |
+| `src/lib/supabase/`                           | `client.ts`, `server.ts`, `session.ts` (user session + RLS), `admin.ts` (secret key)                       |
+| `src/lib/igdb/`, `src/lib/pinecone/`          | IGDB + Pinecone integrations (Prompts 3/7/7C) — most files server-only; see docs/IGDB.md, docs/PINECONE.md |
+| `src/lib/rating.ts`                           | Single source of the 1–10 (DB) ↔ 0.5–5.0★ (UI) conversion                                                  |
+| `src/components/ui/`                          | shadcn primitives                                                                                          |
+| `src/components/common/`, `layout/`, `games/` | Shared foundations (empty/error state, typography, app shell, poster skeleton)                             |
+| `supabase/migrations/`                        | Committed SQL migrations — source of truth, **not** linked to any remote project                           |
+| `docs/`                                       | Architecture, roadmap, project state, environment contract                                                 |
 
 ## Commands
 

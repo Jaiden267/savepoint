@@ -319,17 +319,24 @@ async function buildRecordForGame(
     themes: refs.themes,
   });
   const fields = buildGameRecordFields({
-    gameId: gameRow.id,
     igdbId: gameRow.igdb_id,
     slug: gameRow.slug,
     name: gameRow.name,
     releaseDate: gameRow.release_date,
     genres: refs.genres,
     platforms: refs.platforms,
+    gameModes: refs.gameModes,
     coverImageId: gameRow.cover_image_id,
+    // Same simplification as sync.ts: the cached `games` row has no
+    // column for IGDB's own `updated_at`, so this on-demand-cache
+    // backfill path doesn't make an extra IGDB call just for this
+    // optional metadata field.
+    igdbUpdatedAtUnix: null,
   });
 
-  return { id: gameId, text, ...fields };
+  // v2 record id: `igdb-${igdbId}`, matching sync.ts — not the raw
+  // Supabase UUID. See docs/PINECONE.md's schema-v2 section.
+  return { id: `igdb-${gameRow.igdb_id}`, text, ...fields };
 }
 
 const MAX_TRANSIENT_RETRIES = 3;

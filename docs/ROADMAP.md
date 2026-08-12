@@ -55,6 +55,22 @@ fixed — do not renumber later stages when adding work to an earlier one.
       [PROJECT_STATE.md](./PROJECT_STATE.md). **Recommendations and
       reasons, and `recommendation_feedback`, are not started** — left for
       a later pass, hence this line stays unchecked.
+- [ ] **Prompt 7C — broad IGDB catalogue semantic indexing**: expands
+      Prompt 7's semantic search from cached-only to a curated ~25–29K-game
+      IGDB catalogue slice, without bulk-populating Supabase. **Gate A1/A2
+      (infrastructure) is complete**: the migration is applied and
+      live-verified (three new tables, an atomic checkpoint RPC with real
+      compare-and-set fencing, a global lease, per-minute Pinecone pacing),
+      the Pinecone record schema moved to v2 (`igdb-${igdbId}` ids,
+      `schema_version`-aware re-sync), the semantic-search hydration path
+      was fixed to key on `igdb_id` (never a Supabase UUID), catalogue-only
+      results render with a POST-based import boundary, and both operator
+      scripts (`igdb-catalogue-estimate`, `igdb-catalogue-sync`) are built
+      and dry-run-verified. See [PINECONE.md](./PINECONE.md#broad-catalogue-indexing-prompt-7c)
+      and [PROJECT_STATE.md](./PROJECT_STATE.md). **No live IGDB catalogue
+      discovery or Pinecone catalogue upsert has run** — Gates B (profile
+      selection) through E (full background sync) each remain behind a
+      separate, explicit future approval, hence this line stays unchecked.
 - [ ] **Prompt 8 — Hardening/deploy**: Playwright e2e, accessibility/contrast
       pass, Dockerfile, ZimaOS deployment, cron refresh endpoint. **The
       design/responsive/accessibility portion is complete and fully
