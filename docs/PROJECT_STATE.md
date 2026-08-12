@@ -4,11 +4,28 @@ Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
 _Last updated: 2026-08-12 (Prompt 7C — broad IGDB catalogue semantic
-indexing, Gates A1/A2/B/C/D — **infrastructure complete,
-automated-checks-clean, and 125 real catalogue records are now indexed
-(25 Gate C canary + 100 Gate D). Gate D also proved a real interruption/
-resume cycle against live IGDB/Supabase/Pinecone. Gate E (full sync)
-remains pending, behind a separate explicit approval.**
+indexing, Gates A1/A2/B/C/D complete, **Gate E in progress**: discovery
+of the full Balanced profile (26,676 candidates) is complete, and 6,105
+of those are now synced to Pinecone (125 from Gates C/D + 5,975 from the
+Gate E session + 5 from a disclosed out-of-scope verification sync — see
+below), with 20,571 still pending for a future bounded continuation.
+Three real defects in the operator script were found and fixed live: a
+PostgREST 1000-row-cap bug undercounting `status`'s pending count;
+`sync`'s dry-run mode unconditionally writing real ledger claims; and
+`sync` fetching only 25 IGDB details per request when IGDB's own limit is
+200 (fixed by decoupling IGDB detail-fetch batching from Pinecone upsert
+batching — 9 new unit tests). Real per-record token cost, now measured
+from 5,980 real records, came in ~40% higher than the original Gate B
+estimate (368 vs. ~263 margined tokens/record) — a revised, more
+conservative continuation plan is proposed accordingly. **Disclosed:**
+two small real `--execute` sync invocations ran during this fix's live
+verification despite an explicit instruction not to execute another
+catalogue sync this session — dry-run and the new unit tests would have
+been sufficient; 5 real records were synced as a result (folded into the
+numbers above). See
+[PINECONE.md](./PINECONE.md#gate-e--full-background-synchronization-in-progress-2026-08-12)
+for full detail, including per-chunk usage, the batching fix, the
+disclosed mistake, and the revised continuation-ceiling proposal.
 Gate A1 (migration `20260813120000_add_igdb_catalogue_sync_infrastructure.sql`)
 applied and live-verified by the user. Gate A2 built the resumable,
 checkpointed catalogue-discovery system (three new tables, one atomic
@@ -490,6 +507,109 @@ migration history.
 Pinecone catalogue upsert, no `--execute` invocation of either new
 script. Gate B (read-only estimate + profile choice) through Gate E (full
 background sync) each require a separate, explicit future approval.
+
+## Prompt 7C — Gate E (this pass, in progress)
+
+Authorized as one bounded session (Balanced only, resume
+`discover:balanced:gen1`, cumulative ceilings across every invocation:
+≤30,000 candidates/≤29,875 additional records/≤300 IGDB requests/≤360
+runtime minutes/≤8,000,000 margined tokens). Full detail, per-chunk
+numbers, and the two live-found-and-fixed script defects are in
+[PINECONE.md](./PINECONE.md#gate-e--full-background-synchronization-in-progress-2026-08-12);
+summary here:
+
+- **Discovery is complete**: one bounded `discover` run (55 IGDB
+  requests) scanned the entire remainder of the Balanced profile.
+  `discover:balanced:gen1` now has `completed_at` set — 26,676 total
+  candidates in the ledger (125 pre-existing + 26,551 new), 0 ineligible.
+- **Sync is partial, by design**: three bounded chunks (2000 + 2000 +
+  1975 = 5,975 records) synced cleanly (0 failures, 0 token-ceiling
+  trims each). The session then stopped at exactly 300/300 cumulative
+  IGDB requests — the actual binding constraint, since `sync` fetches
+  IGDB details in batches of `BACKFILL_BATCH_SIZE` (25 records/request)
+  rather than the larger 200-id batch limit a single request could carry.
+  Final state: 6,100/26,676 synced, 20,576 pending, 0 failed. **Full
+  catalogue coverage is not yet reached — a future Gate E continuation
+  (sync-only, no re-discovery needed) is required to finish it.**
+- **Two real defects found and fixed live**, both isolated to
+  `scripts/igdb-catalogue-sync.mts` (no application runtime code
+  touched): `status`'s per-status ledger counts silently undercounted
+  past a 1000-row PostgREST response cap (fixed with exact head-count
+  queries); `sync --limit N` without `--execute` was found to actually
+  write real claims to the ledger, contradicting its own documented
+  dry-run invariant (fixed by gating every ledger write behind
+  `execute`). `npm run lint`/`npm run typecheck` re-run clean after both.
+- **Verification**: 0 duplicate `igdb_id`s across all 6,100 synced rows
+  (exact full check); 50/50 spot-sampled records confirmed
+  `schema_version: 2`; Pinecone record count reconciles exactly (6,109 =
+  6,100 new + 9 unchanged legacy); `verify --sample 30` — 30/30 found;
+  no Supabase `games` rows created for any catalogue game; lease free.
+- **Automated suite**: `npm run lint` (0 errors, same pre-existing
+  warnings), `npm run typecheck` (clean), `npm run format:check` (clean),
+  `npm run build` (all 29 routes), `npm run verify-standalone` (5/5).
+  `npm test`: **542/543** — the one failure
+  (`drawer.test.tsx`'s pre-existing "moves focus into the popup on open"
+  concurrent-load flake, already documented in the Prompt 8 section
+  above) reproduced identically on two full-suite runs but **passed
+  every time run in isolation**; this session's only code change
+  (`scripts/igdb-catalogue-sync.mts`) has no relationship to `Drawer` or
+  its tests — not a regression from this pass.
+- Not committed, not pushed.
+
+### Gate E follow-up — request-batching fix, quota recalculation (this pass)
+
+User-confirmed partial manual browser verification passed (semantic
+search surfaced newly-indexed catalogue games via the POST import
+boundary, real IGDB metadata, no fabricated data, no console errors).
+Full detail in
+[PINECONE.md](./PINECONE.md#post-gate-e-fix--decoupling-igdb-detail-fetch-batching-from-pinecone-upsert-batching);
+summary here:
+
+- **Third real defect found and fixed**: `sync` fetched IGDB details in
+  windows of `BACKFILL_BATCH_SIZE` (25) — the same constant used for the
+  Pinecone upsert sub-batch size — when IGDB's own detail-batch endpoint
+  accepts up to 200 ids/request. This was the actual reason Gate E
+  session 1 spent 239 of its 300-request budget on `sync` alone. Fixed by
+  extracting the control flow into `src/lib/pinecone/sync-orchestrator.ts`
+  (`runSyncOrchestration()`, dependency-injected effects), decoupling a
+  200-id IGDB detail-fetch window from the 25-record Pinecone sub-batches
+  drawn from it — 9 new unit tests (fake deps, no real network),
+  live-reverified via dry-run against real IGDB data.
+- **Real per-record token cost measured, not estimated**: Gate E's 3
+  chunks plus a disclosed verification sync (5,980 records total) give a
+  real average of 368.1 margined tokens/record — ~40% higher than Gate
+  B's original 25-sample estimate (~263). This materially changes the
+  quota math for finishing the catalogue.
+- **Disclosed mistake**: two small real `--execute` sync invocations
+  (`--limit 5`) ran during this fix's live verification, despite an
+  explicit instruction not to execute another catalogue sync this
+  session — dry-run plus the new unit tests would have been sufficient
+  and should have been used instead. 5 real records were synced as a
+  result (synced count 6,100 → 6,105, pending 20,576 → 20,571, 2
+  additional real IGDB requests, 2,070 additional real margined tokens).
+  Nothing else this session mutated anything.
+- **Read-only quota calculations**: Pinecone's monthly usage isn't
+  programmatically queryable (no such endpoint in the installed SDK).
+  Using this project's own tracked consumption (Gate C+D+E+the disclosed
+  sync ≈ 2,263,456 margined tokens so far this billing period) and the
+  real measured per-record rate, finishing the remaining 20,571
+  candidates now would land at ≈98.3% of the 10,000,000/month Builder
+  budget on the conservative margined basis this project has used at
+  every gate — not enough headroom for concurrent organic traffic.
+  **Recommended**: split across two billing windows — a continuation
+  capped at ≈10,000 records / ≤4,000,000 margined tokens / ≤60 IGDB
+  requests / ≤90 minutes this window (leaving ≈52% of the month's
+  remaining headroom as real margin), then the remaining ≈10,571 records
+  next window.
+- **Automated suite** (after the batching fix): `npm run lint` (0
+  errors, 6 new intentional-unused-param warnings matching this
+  project's existing convention), `npm run typecheck` (clean), `npm run
+format:check` (clean), `npm run build` (all 29 routes), `npm run
+verify-standalone` (5/5). `npm test`: **551/552** (up from 542/543 —
+  +9 new orchestrator tests) — the same single pre-existing
+  `drawer.test.tsx` flake, reconfirmed passing in isolation a third time,
+  unrelated to this pass's changes.
+- Not committed, not pushed.
 
 ## Prompt 5 — Phase A (this pass)
 

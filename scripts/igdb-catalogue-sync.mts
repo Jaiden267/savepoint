@@ -73,7 +73,7 @@ import {
 } from "../src/lib/pinecone/lease.ts";
 import { buildCataloguePageKey } from "../src/lib/pinecone/catalogue-page-key.ts";
 import { EmbedRatePacer } from "../src/lib/pinecone/embed-rate-pacer.ts";
-import { selectWithinTokenBudget } from "../src/lib/pinecone/token-budget.ts";
+import { runSyncOrchestration } from "../src/lib/pinecone/sync-orchestrator.ts";
 import {
   CATALOGUE_PROFILES,
   isEligibleForCatalogue,
@@ -236,6 +236,12 @@ class RunTracker {
       0,
       this.ceilings.maxEstimatedEmbeddingTokens - this.estimatedTokens,
     );
+  }
+
+  /** Items still available under --limit before the next fetch window, given what's already been processed this run. Infinity when no ceiling is in effect. Used to size sync's IGDB detail-fetch window precisely, so a bounded run's item count is never overshot by a partial-batch's worth. */
+  remainingItemAllowance(): number {
+    if (!this.ceilings) return Number.POSITIVE_INFINITY;
+    return Math.max(0, this.ceilings.limit - this.itemsProcessed);
   }
 
   requestSignalShutdown(reason: StopReason) {
@@ -956,72 +962,65 @@ async function finalizeSyncRow(
     .eq("last_attempted_at", claimed.claimTimestamp);
 }
 
+interface SyncClaim {
+  igdbId: number;
+  attemptCount: number;
+  claimTimestamp: string;
+}
+type SyncRecord = { id: string; text: string } & GameVectorFields;
+
 // `lease` isn't read directly — `sync`'s per-record protocol reuses the
 // existing claim/finalize optimistic lock on igdb_catalogue_sync itself
 // (no RPC call, so no lease token to pass), but the lease is still
 // acquired and held for the whole command by withLease() below, purely
 // for mutual exclusion against discover/incremental/release-check.
+//
+// This is a thin wrapper supplying real Supabase/IGDB/Pinecone deps to
+// runSyncOrchestration() (src/lib/pinecone/sync-orchestrator.ts), which
+// owns the actual control flow: an outer loop over IGDB detail-fetch
+// windows (up to CATALOGUE_DETAIL_BATCH_LIMIT=200 ids, one real IGDB
+// request each) and an inner loop splitting each window's built records
+// into BACKFILL_BATCH_SIZE-sized, token-budgeted Pinecone sub-batches —
+// decoupled so `sync` no longer fetches only 25 IGDB details per request.
+// See that module's own header comment for the full design and why it's
+// unit-tested there instead of here (this script is outside npm test's
+// scope, matching every other scripts/*.mts operator tool).
 async function runSync(tracker: RunTracker, _lease: CatalogueLease | null) {
   const namespace = execute ? await getNamespace() : null;
   const pacer = new EmbedRatePacer();
-  let stop: StopReason | null = null;
 
-  for (;;) {
-    stop = tracker.shouldStop();
-    if (stop) break;
+  return runSyncOrchestration<
+    SyncCandidateRow,
+    SyncClaim,
+    IgdbGameDetailRaw,
+    SyncRecord,
+    StopReason
+  >(tracker, {
+    execute,
+    detailFetchWindowLimit: CATALOGUE_DETAIL_BATCH_LIMIT,
+    pineconeSubBatchSize: BACKFILL_BATCH_SIZE,
+    maxRecordsPerUpsert: MAX_RECORDS_PER_UPSERT,
 
-    const candidates = await fetchSyncCandidates(BACKFILL_BATCH_SIZE);
-    if (candidates.length === 0) {
-      stop = { kind: "exhausted" };
-      break;
-    }
+    fetchCandidates: (limit) => fetchSyncCandidates(limit),
+    claimRow: (row) => claimSyncRow(row),
+    previewClaim: (row) => ({
+      igdbId: row.igdb_id,
+      attemptCount: row.attempt_count,
+      claimTimestamp: row.last_attempted_at ?? new Date().toISOString(),
+    }),
+    getIgdbId: (claim) => claim.igdbId,
 
-    const claimed: {
-      igdbId: number;
-      attemptCount: number;
-      claimTimestamp: string;
-    }[] = [];
-    for (const row of candidates) {
-      const claim = await claimSyncRow(row);
-      if (claim) claimed.push(claim);
-    }
-    if (claimed.length === 0) continue;
-
-    const detailQuery = buildCatalogueDetailBatchQuery(
-      claimed.slice(0, CATALOGUE_DETAIL_BATCH_LIMIT).map((c) => c.igdbId),
-    );
-    let details: IgdbGameDetailRaw[];
-    try {
-      details = await igdbFetch<IgdbGameDetailRaw>(
+    fetchDetails: async (ids) => {
+      const detailQuery = buildCatalogueDetailBatchQuery(ids);
+      const details = await igdbFetch<IgdbGameDetailRaw>(
         tracker,
         "games",
         detailQuery,
       );
-    } catch (err) {
-      for (const claim of claimed) {
-        await finalizeSyncRow(claim, {
-          status: "failed",
-          error: sanitizeErrorForStorage(err),
-        });
-      }
-      tracker.itemsProcessed += claimed.length;
-      continue;
-    }
-    const byId = new Map(details.map((d) => [d.id, d]));
+      return new Map(details.map((d) => [d.id, d]));
+    },
 
-    interface BuiltRecord {
-      claim: (typeof claimed)[number];
-      record: { id: string; text: string } & GameVectorFields;
-      charCount: number;
-    }
-    const built: BuiltRecord[] = [];
-    const buildFailures: typeof claimed = [];
-    for (const claim of claimed) {
-      const raw = byId.get(claim.igdbId);
-      if (!raw) {
-        buildFailures.push(claim);
-        continue;
-      }
+    buildRecord: (claim, raw) => {
       const detail = mapIgdbGameToRow(raw);
       const text = buildGameEmbeddingText({
         name: detail.game.name,
@@ -1044,78 +1043,28 @@ async function runSync(tracker: RunTracker, _lease: CatalogueLease | null) {
         coverImageId: detail.game.cover_image_id ?? null,
         igdbUpdatedAtUnix: (raw as { updated_at?: number }).updated_at ?? null,
       });
-      built.push({
-        claim,
+      return {
         record: { id: `igdb-${claim.igdbId}`, text, ...fields },
         charCount: text.length,
-      });
-    }
+      };
+    },
 
-    for (const claim of buildFailures) {
-      await finalizeSyncRow(claim, {
-        status: "failed",
-        error: "no IGDB detail returned for this id",
-      });
-    }
+    finalizeSynced: (claim) => finalizeSyncRow(claim, { status: "synced" }),
+    finalizeFailed: (claim, error) =>
+      finalizeSyncRow(claim, { status: "failed", error }),
 
-    // Enforce --max-estimated-embedding-tokens *before* every upsert, not
-    // just between batches. BACKFILL_BATCH_SIZE can equal --limit (exactly
-    // what happened in Gate C's real canary), in which case the whole run
-    // is a single batch and there's no later batch-boundary check to catch
-    // an oversized one — this trims an ordered prefix so the command never
-    // knowingly sends a batch whose margined estimate would exceed the
-    // remaining allowance. Anything trimmed stays claimed-but-pending in
-    // the ledger (status was already set to 'pending' by claimSyncRow
-    // above) and is naturally picked up by a future `sync` invocation.
-    const { selected, trimmed, rawTokens, marginedTokens } =
-      selectWithinTokenBudget(built, tracker.remainingTokenAllowance());
-
-    if (trimmed.length > 0) {
-      console.log(
-        `Token ceiling: ${selected.length}/${built.length} record(s) fit the remaining --max-estimated-embedding-tokens allowance ` +
-          `(raw=${rawTokens} margined=${marginedTokens} tokens); ${trimmed.length} left pending for a future run.`,
-      );
-    }
-
-    if (selected.length > 0 && execute && namespace) {
+    upsertBatch: async (records, marginedTokens) => {
       await pacer.waitForCapacity(marginedTokens);
-      try {
-        await namespace.upsertRecords({
-          records: selected
-            .map((s) => s.record)
-            .slice(0, MAX_RECORDS_PER_UPSERT),
-        });
-        for (const s of selected) {
-          await finalizeSyncRow(s.claim, { status: "synced" });
-        }
-      } catch (err) {
-        for (const s of selected) {
-          await finalizeSyncRow(s.claim, {
-            status: "failed",
-            error: sanitizeErrorForStorage(err),
-          });
-        }
-      }
-    } else if (selected.length > 0) {
-      console.log(
-        `[dry-run] Would embed + upsert ${selected.length} record(s) (raw=${rawTokens} margined=${marginedTokens} tokens).`,
-      );
-    }
+      await namespace!.upsertRecords({ records });
+    },
 
-    tracker.estimatedTokens += marginedTokens;
-    tracker.itemsProcessed += selected.length + buildFailures.length;
-    console.log(
-      `Batch: ${claimed.length} claimed, ${built.length} built, ${buildFailures.length} build failures, ` +
-        `${selected.length} synced this batch, ${trimmed.length} deferred by token ceiling`,
-    );
+    sanitizeError: (err) => sanitizeErrorForStorage(err),
 
-    if (trimmed.length > 0) {
-      stop = { kind: "ceiling", which: "--max-estimated-embedding-tokens" };
-      break;
-    }
-  }
+    exhaustedStop: { kind: "exhausted" },
+    ceilingStop: { kind: "ceiling", which: "--max-estimated-embedding-tokens" },
 
-  return stop;
+    onLog: (message) => console.log(message),
+  });
 }
 
 // --- status / verify (read-only, bounded) ---------------------------------
@@ -1127,12 +1076,19 @@ async function runStatus() {
   const { data: cursors } = await admin
     .from("igdb_catalogue_discovery_cursor")
     .select("*");
-  const { data: statusCounts } = await admin
-    .from("igdb_catalogue_sync")
-    .select("status");
+  // Four separate exact head-counts, not a single `.select("status")` fetch
+  // counted client-side — PostgREST caps a row-returning select at 1000
+  // rows by default, which silently undercounted `pending` once the ledger
+  // grew past that (found live in Gate E: reported 875 pending against a
+  // true 26,551). `head: true` with `count: "exact"` returns only a count
+  // header, never subject to that row cap.
   const counts = { pending: 0, synced: 0, failed: 0, ineligible: 0 };
-  for (const row of statusCounts ?? []) {
-    if (row.status in counts) counts[row.status as keyof typeof counts] += 1;
+  for (const status of Object.keys(counts) as (keyof typeof counts)[]) {
+    const { count } = await admin
+      .from("igdb_catalogue_sync")
+      .select("igdb_id", { count: "exact", head: true })
+      .eq("status", status);
+    counts[status] = count ?? 0;
   }
   const { count: ledgerTotal } = await admin
     .from("igdb_catalogue_sync")
