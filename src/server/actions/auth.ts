@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { clientEnv } from "@/lib/env";
@@ -8,11 +9,21 @@ import {
   signInSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resendConfirmationSchema,
 } from "@/lib/validation/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getClientIdentifier } from "@/lib/auth/request-ip";
 import { isSafeRedirectPath } from "@/lib/auth/redirect-safety";
 import type { ActionState } from "@/lib/action-state";
+
+/**
+ * Deterministic one-way key for the per-target resend cooldown bucket.
+ * Never key an in-memory rate-limit bucket on a raw email address — this
+ * hash is never logged and the input email is never recoverable from it.
+ */
+function hashEmailForRateLimit(normalizedEmail: string): string {
+  return createHash("sha256").update(normalizedEmail).digest("hex");
+}
 
 /**
  * Maps common Supabase Auth error strings to calm, non-technical copy.
@@ -98,6 +109,7 @@ export async function signUpAction(
     status: "success",
     message:
       "Check your inbox to confirm your email and finish creating your account.",
+    email: parsed.data.email,
   };
 }
 
@@ -192,7 +204,7 @@ export async function forgotPasswordAction(
   return {
     status: "success",
     message:
-      "If an account exists for that email, we've sent a link to reset your password.",
+      "If an account exists for that email, we've sent a link to reset your password. Check your inbox — and your spam or junk folder — for it.",
   };
 }
 
@@ -200,6 +212,18 @@ export async function resetPasswordAction(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  const identifier = await getClientIdentifier();
+  const rate = checkRateLimit(`reset-password:${identifier}`, {
+    limit: 10,
+    windowSeconds: 15 * 60,
+  });
+  if (!rate.allowed) {
+    return {
+      status: "error",
+      message: "Too many attempts. Please wait a few minutes and try again.",
+    };
+  }
+
   const parsed = resetPasswordSchema.safeParse({
     password: formData.get("password"),
     confirmPassword: formData.get("confirmPassword"),
@@ -236,4 +260,64 @@ export async function resetPasswordAction(
   }
 
   redirect(await currentUserProfileDestination(supabase, user.id));
+}
+
+export async function resendConfirmationAction(
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const parsed = resendConfirmationSchema.safeParse({
+    email: formData.get("email"),
+  });
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Enter a valid email address.",
+      fieldErrors: parsed.error.flatten().fieldErrors,
+    };
+  }
+
+  const identifier = await getClientIdentifier();
+  const rate = checkRateLimit(`resend-confirmation:${identifier}`, {
+    limit: 5,
+    windowSeconds: 15 * 60,
+  });
+  if (!rate.allowed) {
+    return {
+      status: "error",
+      message: "Too many attempts. Please wait a few minutes and try again.",
+    };
+  }
+
+  const normalizedEmail = parsed.data.email.trim().toLowerCase();
+  const emailRate = checkRateLimit(
+    `resend-confirmation-email:${hashEmailForRateLimit(normalizedEmail)}`,
+    { limit: 1, windowSeconds: 60 },
+  );
+  if (!emailRate.allowed) {
+    return {
+      status: "error",
+      message: "Too many attempts. Please wait a moment and try again.",
+    };
+  }
+
+  const supabase = await createClient();
+  // Result (including any error) is deliberately ignored, same as
+  // forgotPasswordAction: whether the account exists or is already
+  // confirmed, the response to the user must be identical — see the
+  // SECURITY requirement in docs/AUTH.md. Never branch user-visible
+  // behavior on this call's outcome.
+  await supabase.auth.resend({
+    type: "signup",
+    email: parsed.data.email,
+    options: {
+      emailRedirectTo: `${clientEnv.NEXT_PUBLIC_APP_URL}/auth/callback?next=${encodeURIComponent("/onboarding")}`,
+    },
+  });
+
+  return {
+    status: "success",
+    message:
+      "If that email needs confirming, we've sent a new link. Check your inbox — and your spam or junk folder — for it.",
+  };
 }

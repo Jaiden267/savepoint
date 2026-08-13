@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { clientEnv } from "@/lib/env";
 import { isSafeRedirectPath } from "@/lib/auth/redirect-safety";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,13 @@ export const dynamic = "force-dynamic";
  * once the exchange succeeds.
  */
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  // Every redirect target below is built from NEXT_PUBLIC_APP_URL, never
+  // from the incoming request's own origin/Host header — consistent with
+  // every other emailRedirectTo/redirectTo in this codebase (see
+  // docs/AUTH.md), and avoids trusting a client-controllable header for a
+  // redirect target.
+  const origin = clientEnv.NEXT_PUBLIC_APP_URL;
   const code = searchParams.get("code");
   const rawNext = searchParams.get("next");
   const next = isSafeRedirectPath(rawNext) ? rawNext : null;

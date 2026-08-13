@@ -20,6 +20,11 @@ describe("isSafeRedirectPath", () => {
   it("rejects an embedded scheme anywhere in the path", () => {
     expect(isSafeRedirectPath("/redirect?to=javascript://evil")).toBe(false);
   });
+  it("rejects backslash-based bypasses some browsers/proxies normalize toward //evil.com", () => {
+    expect(isSafeRedirectPath("/\\evil.com")).toBe(false);
+    expect(isSafeRedirectPath("/\\/evil.com")).toBe(false);
+    expect(isSafeRedirectPath("/settings\\..\\evil.com")).toBe(false);
+  });
 
   it("rejects empty, null, and undefined input", () => {
     expect(isSafeRedirectPath("")).toBe(false);

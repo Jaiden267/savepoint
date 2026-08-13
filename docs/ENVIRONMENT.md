@@ -6,11 +6,11 @@ fill in real values there; `.env.local` is gitignored.
 
 ## Client-safe (`NEXT_PUBLIC_*`, inlined into the browser bundle at build time)
 
-| Variable                               | Purpose                                                                                                                                       |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`             | Supabase project URL, used by the browser and SSR Supabase clients.                                                                           |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key. Safe for the browser — all access it grants is still subject to Row Level Security. **Not** the legacy anon key.    |
-| `NEXT_PUBLIC_APP_URL`                  | The app's own public origin (e.g. for building absolute links/redirects, OAuth callback URLs, metadata). Defaults to `http://localhost:3000`. |
+| Variable                               | Purpose                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Supabase project URL, used by the browser and SSR Supabase clients.                                                                                                                                                                                                                                                                                                                                                |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key. Safe for the browser — all access it grants is still subject to Row Level Security. **Not** the legacy anon key.                                                                                                                                                                                                                                                                         |
+| `NEXT_PUBLIC_APP_URL`                  | The app's own public origin (e.g. for building absolute links/redirects, OAuth callback URLs, metadata). Defaults to `http://localhost:3000`. Must match Supabase Auth's **Site URL**/**Redirect URLs** — it's the domain `/auth/callback` and the rest of this app are actually served from, not necessarily the same as any dedicated email-sending domain (see docs/AUTH.md's Dashboard configuration section). |
 
 ## Server-only (never sent to the browser)
 

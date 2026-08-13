@@ -248,6 +248,18 @@ otp_expiry = 3600
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
 
+# Savepoint's real templates — local-parity only. The hosted Supabase
+# Dashboard is the production source of truth for live delivery; these
+# entries just let local Supabase tooling render the same HTML. See
+# supabase/templates/README.md for the manual Dashboard paste steps.
+[auth.email.template.confirmation]
+subject = "Confirm your Savepoint account"
+content_path = "./supabase/templates/confirm-signup.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Savepoint password"
+content_path = "./supabase/templates/reset-password.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true

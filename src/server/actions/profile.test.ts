@@ -7,6 +7,8 @@ const {
   mockRemove,
   mockStorageFrom,
   mockEq,
+  mockSelect,
+  mockMaybeSingle,
   mockUpdate,
   mockFrom,
   mockRevalidatePath,
@@ -20,6 +22,8 @@ const {
     remove: mockRemove,
   }));
   const mockEq = vi.fn();
+  const mockSelect = vi.fn();
+  const mockMaybeSingle = vi.fn();
   const mockUpdate = vi.fn(() => ({ eq: mockEq }));
   const mockFrom = vi.fn(() => ({ update: mockUpdate }));
   const mockRevalidatePath = vi.fn();
@@ -32,6 +36,8 @@ const {
     mockRemove,
     mockStorageFrom,
     mockEq,
+    mockSelect,
+    mockMaybeSingle,
     mockUpdate,
     mockFrom,
     mockRevalidatePath,
@@ -51,7 +57,7 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("next/cache", () => ({ revalidatePath: mockRevalidatePath }));
 vi.mock("next/navigation", () => ({ redirect: mockRedirect }));
 
-import { removeAvatarAction } from "./profile";
+import { removeAvatarAction, completeOnboardingAction } from "./profile";
 
 /**
  * Covers the two effects required of a successful removal (storage cleanup +
@@ -141,5 +147,95 @@ describe("removeAvatarAction", () => {
 
     expect(result).toEqual({ status: "success", message: "Avatar removed." });
     expect(mockRevalidatePath).toHaveBeenCalledWith("/settings/profile");
+  });
+});
+
+/**
+ * completeOnboardingAction's UPDATE...SELECT chain is a different shape
+ * than removeAvatarAction's plain UPDATE, so it reconfigures the shared
+ * mockEq/mockUpdate mocks in its own beforeEach rather than reusing
+ * removeAvatarAction's setup above.
+ */
+describe("completeOnboardingAction", () => {
+  const user = { id: "user-1" };
+
+  function formWith(username: string) {
+    const formData = new FormData();
+    formData.set("username", username);
+    formData.set("displayName", "");
+    formData.set("bio", "");
+    return formData;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUser.mockResolvedValue({ data: { user } });
+    mockUpdate.mockReturnValue({ eq: mockEq });
+    mockEq.mockReturnValue({ select: mockSelect });
+    mockSelect.mockReturnValue({ maybeSingle: mockMaybeSingle });
+  });
+
+  it("redirects unauthenticated callers instead of touching the database", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: null } });
+
+    await expect(
+      completeOnboardingAction(initialActionState, formWith("alice_1")),
+    ).rejects.toThrow("REDIRECT:/login");
+
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it("redirects to the updated username's profile when a row was actually updated", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { username: "alice_1" },
+      error: null,
+    });
+
+    await expect(
+      completeOnboardingAction(initialActionState, formWith("alice_1")),
+    ).rejects.toThrow("REDIRECT:/users/alice_1");
+
+    expect(mockSelect).toHaveBeenCalledWith("username");
+  });
+
+  it("surfaces a database error without redirecting", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: null,
+      error: { message: "duplicate key value" },
+    });
+
+    const result = await completeOnboardingAction(
+      initialActionState,
+      formWith("alice_1"),
+    );
+
+    expect(result.status).toBe("error");
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it("returns a friendly error instead of redirecting when the UPDATE matches zero rows (missing profile)", async () => {
+    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
+
+    const result = await completeOnboardingAction(
+      initialActionState,
+      formWith("alice_1"),
+    );
+
+    expect(result).toEqual({
+      status: "error",
+      message:
+        "We couldn't find your account profile. Please sign out and back in, or contact support.",
+    });
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid username without querying the database", async () => {
+    const result = await completeOnboardingAction(
+      initialActionState,
+      formWith("a"),
+    );
+
+    expect(result.status).toBe("error");
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 });

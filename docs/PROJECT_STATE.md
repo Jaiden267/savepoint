@@ -1001,6 +1001,91 @@ console errors.
 **The broad-catalogue random Discover feature is complete** — automated
 and manual verification both passed. Not committed, not pushed.
 
+## Prompt B — auth email and account-lifecycle hardening (this pass)
+
+Full audit of the account/auth lifecycle (signup, confirmation, resend,
+sign-in, forgot/reset password, PKCE callback, expired/reused links,
+signed-in-visiting-auth-routes, onboarding redirects, deleted/incomplete
+profiles) plus the first version-controlled email templates for the two
+Supabase-managed auth emails this app actually sends, without replacing
+Supabase Auth or adding a direct Resend API integration.
+
+**Findings and fixes:**
+
+- **New: resend-confirmation-email feature**, built from scratch (didn't
+  exist before). `resendConfirmationAction` (`src/server/actions/auth.ts`)
+  mirrors `forgotPasswordAction`'s anti-enumeration pattern exactly —
+  always the same generic response, Supabase's `resend()` result ignored.
+  Two new rate-limit buckets: `resend-confirmation:` (IP, 5/15min) and
+  `resend-confirmation-email:` (1/60s, keyed on a SHA-256 hash of the
+  normalized email, never the raw address, never logged). New
+  `ResendConfirmationForm` component, embedded on the signup success
+  screen (prefilled) and behind a `<details>` disclosure on `/login`.
+- **`resetPasswordAction` had no rate limit at all** — added (`reset-password:`,
+  10/15min, IP).
+- **`/auth/callback`'s redirects were built from the request's own
+  origin/Host**, not `NEXT_PUBLIC_APP_URL` like every other
+  `emailRedirectTo`/`redirectTo` in the codebase — fixed, functionally a
+  no-op today (the env var already equals the real origin everywhere)
+  but closes a Host-header-trust inconsistency.
+- **`isSafeRedirectPath` didn't reject backslash-based open-redirect
+  bypasses** (e.g. `/\evil.com`) — fixed.
+- **`completeOnboardingAction` didn't verify its `UPDATE` matched a row.**
+  A missing `profiles` row (bootstrap trigger never ran, or deleted
+  outside the app) would silently "succeed" with zero rows affected and
+  redirect to a profile page that was never written. Fixed by checking
+  the returned row before redirecting.
+- **Verified, unchanged** (re-inspected `route-policy.ts` + its test
+  suite directly, no gap found): authenticated users are already
+  redirected away from `/login`/`/signup`/`/forgot-password`; incomplete
+  profiles are already redirected to `/onboarding`; completed profiles
+  are already kept out of `/onboarding`; `/reset-password` is
+  intentionally allowed for an authenticated user regardless of
+  onboarding state.
+- **`docs/AUTH.md`'s Prompt-A "Production (confirmed)" row conflated the
+  auth email sender domain with the app's own Site URL.** Corrected:
+  `savepointauth.uk` is documented as the SMTP sender domain only; Site
+  URL/Redirect URLs/`NEXT_PUBLIC_APP_URL` are marked TBD pending the
+  final public domain (not invented).
+- **New**: `supabase/templates/confirm-signup.html`,
+  `reset-password.html` — dark-themed, table-based, inline-styled, no
+  images/JS/tracking, using Supabase's `{{ .ConfirmationURL }}` variable.
+  `supabase/templates/README.md` has the exact manual Dashboard
+  paste steps. **The hosted Dashboard remains the production source of
+  truth** — nothing pushes these there automatically;
+  `supabase/config.toml` gained matching `[auth.email.template.confirmation]`/
+  `[auth.email.template.recovery]` entries for local-tooling parity only.
+  Magic-link and change-email templates were **not** built — grepping the
+  codebase confirms neither flow exists anywhere.
+
+**Automated verification**: `npm run lint` (0 errors, pre-existing
+warnings only), `npm run typecheck` (clean), `npm test` (704/705 — the
+one failure is the pre-existing, already-documented, unrelated
+`drawer.test.tsx` focus-trap flake, zero diff on that file),
+`npm run format:check` (clean), `npm run build` (all 29 routes),
+`npm run verify-standalone` (5/5), plus a manual real-server check
+confirming `/login`/`/signup` render the new resend UI.
+
+**Live authentication-email verification (user, live Dashboard +
+browser, 2026-08-13): PASSED.** Confirmed: the Confirm signup Dashboard
+template installed (subject "Confirm your Savepoint account") and the
+Reset Password Dashboard template installed (subject "Reset your
+Savepoint password"); a fresh signup received the styled confirmation
+email and the link completed the PKCE callback and onboarding flow; the
+resend-confirmation form worked for an unconfirmed account; nonexistent
+and already-confirmed addresses both produced the identical generic,
+non-enumerating response; password recovery delivered the styled reset
+email, the reset link opened the correct page, and the new password
+worked; reusing an already-consumed link failed safely with no raw
+Supabase error exposed; the resend cooldown/rate limit behaved safely;
+no unexpected console errors or exposed secrets appeared. `docs/AUTH.md`'s
+manual integration checklist's new resend-confirmation/email-template
+items are now checked off.
+
+No Pinecone/IGDB/recommendation changes, no catalogue discovery/sync run,
+no database migration, no direct Resend API integration. Not committed,
+not pushed.
+
 ## Prompt 5 — Phase A (this pass)
 
 Prompt 5 combines what the original roadmap sketched as two separate

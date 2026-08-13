@@ -45,7 +45,7 @@ export async function completeOnboardingAction(
     };
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("profiles")
     .update({
       username: parsed.data.username,
@@ -53,13 +53,27 @@ export async function completeOnboardingAction(
       bio: parsed.data.bio,
       onboarding_completed_at: new Date().toISOString(),
     })
-    .eq("id", user.id);
+    .eq("id", user.id)
+    .select("username")
+    .maybeSingle();
 
   if (error) {
     return { status: "error", message: friendlyProfileError(error.message) };
   }
 
-  redirect(`/users/${parsed.data.username}`);
+  // Zero rows matched (e.g. the bootstrap trigger never ran, or the row
+  // was deleted outside the app) — PostgREST reports this as success with
+  // no error, so it must be checked explicitly. Redirecting here anyway
+  // would send the user to a profile page that was never actually written.
+  if (!updated) {
+    return {
+      status: "error",
+      message:
+        "We couldn't find your account profile. Please sign out and back in, or contact support.",
+    };
+  }
+
+  redirect(`/users/${updated.username}`);
 }
 
 /** Later edits from /settings/profile — same fields, no onboarding stamp. */

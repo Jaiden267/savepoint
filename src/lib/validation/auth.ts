@@ -77,6 +77,11 @@ export const forgotPasswordSchema = z.object({
 });
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 
+export const resendConfirmationSchema = z.object({
+  email: emailSchema,
+});
+export type ResendConfirmationInput = z.infer<typeof resendConfirmationSchema>;
+
 export const resetPasswordSchema = z
   .object({
     password: passwordSchema,

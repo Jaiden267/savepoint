@@ -9,12 +9,21 @@ import { Label } from "@/components/ui/label";
 import { FieldError } from "@/components/common/field-error";
 import { FormAlert } from "@/components/common/form-alert";
 import { SubmitButton } from "@/components/common/submit-button";
+import { ResendConfirmationForm } from "@/components/auth/resend-confirmation-form";
 
 export function SignupForm() {
   const [state, formAction] = useActionState(signUpAction, initialActionState);
 
   if (state.status === "success") {
-    return <FormAlert state={state} />;
+    return (
+      <div className="flex flex-col gap-4">
+        <FormAlert state={state} />
+        <p className="text-muted-foreground text-sm">
+          Didn&apos;t get it? Check spam, or resend below.
+        </p>
+        <ResendConfirmationForm defaultEmail={state.email} />
+      </div>
+    );
   }
 
   return (
