@@ -35,6 +35,11 @@ export const RETRY_COOLDOWN_MS = 15 * 60 * 1000;
 /** Current Pinecone record schema version written by syncGameVector/the catalogue sync — a `game_vector_sync.schema_version` less than this (or null) is re-synced, not skipped, on next touch. */
 export const PINECONE_SCHEMA_VERSION = 2;
 
+/** Canonical v2 Pinecone record id for a game, given its stable IGDB id — the one place this string shape is constructed. Every writer (sync.ts) and reader (any code fetching a catalogue record by igdb_id, e.g. discover-catalogue.ts) must go through this, never reconstruct the `igdb-` prefix inline. */
+export function buildCatalogueRecordId(igdbId: number): string {
+  return `igdb-${igdbId}`;
+}
+
 /** How long the single global catalogue lease (discover/sync/incremental/release-check) is held before it's considered stale and reclaimable. */
 export const CATALOGUE_LEASE_MS = 5 * 60 * 1000;
 

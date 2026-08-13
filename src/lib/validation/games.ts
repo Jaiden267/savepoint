@@ -57,9 +57,26 @@ export const pineconeCatalogueRecordSchema = z.object({
 /** Validates the igdb_id a catalogue-only search result's "import and open" action submits — see src/server/actions/games.ts. */
 export const catalogueImportIgdbIdSchema = z.coerce.number().int().positive();
 
+/**
+ * Validates /discover's `?seed=` param — a 32-bit unsigned integer so the
+ * seeded PRNG (src/lib/random/seeded-random.ts) has a well-defined,
+ * bounded domain. A missing or invalid value triggers page.tsx's
+ * redirect-to-a-fresh-seed path rather than an error, so this only ever
+ * needs to reject, never explain itself to a user. Validated here,
+ * before discover-catalogue.ts's listDiscoverCatalogue is ever called —
+ * that function's signature only accepts an already-validated seed, so
+ * there's no path for a malformed value to reach its same-seed cache key.
+ */
+export const discoverSeedSchema = z.coerce
+  .number()
+  .int()
+  .min(0)
+  .max(0xffffffff);
+
 export type GameSlug = z.infer<typeof gameSlugSchema>;
 export type SearchQuery = z.infer<typeof searchQuerySchema>;
 export type SemanticSearchQuery = z.infer<typeof semanticSearchQuerySchema>;
 export type PineconeCatalogueRecord = z.infer<
   typeof pineconeCatalogueRecordSchema
 >;
+export type DiscoverSeed = z.infer<typeof discoverSeedSchema>;

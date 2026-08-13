@@ -929,6 +929,78 @@ end** — see
 [PINECONE.md](./PINECONE.md#prompt-7c--gate-e--fully-complete-2026-08-13)
 for the consolidated summary. Not committed, not pushed.
 
+## Discover page — broad-catalogue random discovery (this pass)
+
+`/discover` previously queried the `games` cache directly, so it never
+showed anything from Prompt 7C's 26,676-game synced catalogue. Redesigned
+to sample genuinely at random from the full catalogue, reusing existing
+Prompt 7C infrastructure end to end. Full design in
+[PINECONE.md](./PINECONE.md#discover-page--broad-catalogue-random-discovery-2026-08-13);
+summary here:
+
+- **Bounded keyset sampling**, not `ORDER BY random()`: seeded-PRNG
+  threshold seeks off the `igdb_id` primary key, deterministic
+  wrap-around near the max id, and a bounded post-hydration refill (keyed
+  off the _hydrated_ valid count, not the raw id count, so a raw pool
+  that looks sufficient but hydrates thin still gets a second bounded
+  chance) — explicit ceilings throughout (≤14 ledger queries, ≤2
+  hydration rounds), never a scan or a retry loop.
+- **Three outcomes**: ≥20 valid results renders normally; 1–19 renders
+  with an honest "fewer than usual" notice (never a fallback — window
+  overlap/wrap-around/partial hydration are handled in-band); only 0
+  valid results or a genuine ledger/Pinecone error falls back to the
+  repurposed `listDiscoverGames`.
+- **Separate, explicit diversity pass** (soft franchise/year/platform
+  caps, never a hard filter — distinct same-title `igdb_id`s always both
+  stay) — documented as distinct from sampling, not claimed to be
+  inherent to it.
+- **Canonical Pinecone record ids**: extracted `buildCatalogueRecordId`
+  (`src/lib/pinecone/constants.ts`), `sync.ts` updated to use it too — no
+  more than one place constructs the `igdb-` id prefix.
+- **Admin-client boundary hardened**: `server-only` guard, exactly one
+  ledger column selected, zero write calls anywhere (tested), the client
+  itself never returned — narrower than a new RLS grant or a
+  `SECURITY DEFINER` RPC, matching existing precedent for this exact
+  table.
+- **Abuse/cost control**: a new, separately-keyed rate limit
+  (`checkDiscoverRateLimit`, shares no budget with the existing
+  game-import/catalogue-import limiters) checked _after_ a same-seed
+  cache lookup, so cache hits (reload/Back/Forward/duplicate tabs) cost
+  zero quota; only genuine successes are cached, never errors/fallbacks.
+- **SEO**: `alternates.canonical: "/discover"` on every seed variant;
+  Shuffle is a single button, never a crawlable per-seed link.
+- **Stability**: every real render is a pure function of the URL's seed
+  (redirect-to-a-fresh-seed when absent/invalid) — no client-side
+  randomness ever touches the rendered grid, so no reshuffle-on-rerender
+  and no hydration mismatch.
+- **Shared rendering**: `/search`'s mixed cached/catalogue-only grid JSX
+  extracted into `GameResultGrid`, reused by both pages — no behavior
+  change to `/search` (existing tests pass unchanged).
+- **No migration needed** — existing indexes (ledger PK, `games`
+  unique-constraint) are sufficient at current scale.
+- New tests across `seeded-random.ts`, `discover-catalogue.ts` (including
+  wrap-around, overlapping windows, bounded refill, no-incorrect-fallback,
+  diversity-pass, rate-limit/cache-ordering, read-only invariants),
+  `game-result-grid.tsx`, `discover-shuffle-button.tsx`,
+  `discover-results.tsx`, and `discover/page.tsx`.
+- Not committed, not pushed. No catalogue discovery/sync run; no Pinecone
+  index touched; no migration created.
+
+**Manual verification (user, browser, 2026-08-13): PASSED.** Confirmed:
+`/discover` redirects to a stable seeded URL; ~20–24 unique games render
+from the broad synced catalogue, including previously-uncached
+catalogue-only games; Shuffle changes both seed and selection; Browser
+Back restores the previous seed and selection in the same order; cached
+games open through their stored slug; catalogue-only games use the POST
+import boundary and redirect successfully to `/games/<slug>`; imported
+game pages show genuine IGDB metadata with no fabricated
+ratings/reviews/activity; keyboard navigation works for Shuffle and game
+cards; mobile layout has no horizontal overflow; no unexpected
+console errors.
+
+**The broad-catalogue random Discover feature is complete** — automated
+and manual verification both passed. Not committed, not pushed.
+
 ## Prompt 5 — Phase A (this pass)
 
 Prompt 5 combines what the original roadmap sketched as two separate

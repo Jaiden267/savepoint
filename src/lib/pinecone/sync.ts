@@ -15,6 +15,7 @@ import {
   SYNC_LEASE_MS,
   RETRY_COOLDOWN_MS,
   PINECONE_SCHEMA_VERSION,
+  buildCatalogueRecordId,
 } from "./constants.ts";
 import type { TablesUpdate } from "@/types/database";
 
@@ -212,14 +213,16 @@ async function runSync(gameId: string): Promise<SyncOutcome> {
       igdbUpdatedAtUnix: null,
     });
 
-    // v2 record id: `igdb-${igdbId}`, not the raw Supabase UUID — see
-    // docs/PINECONE.md's schema-v2/compatibility section. Search-time
-    // hydration (semantic-search.ts) resolves purely by the `igdb_id`
-    // metadata field, which is present and correctly typed on both v1
-    // and v2 records, so this ID-scheme change is safe to make
+    // v2 record id: buildCatalogueRecordId(igdbId), not the raw Supabase
+    // UUID — see docs/PINECONE.md's schema-v2/compatibility section.
+    // Search-time hydration (semantic-search.ts) resolves purely by the
+    // `igdb_id` metadata field, which is present and correctly typed on
+    // both v1 and v2 records, so this ID-scheme change is safe to make
     // unilaterally here without touching the read path at the same time.
     await namespace.upsertRecords({
-      records: [{ id: `igdb-${gameRow.igdb_id}`, text, ...fields }],
+      records: [
+        { id: buildCatalogueRecordId(gameRow.igdb_id), text, ...fields },
+      ],
     });
 
     return await finalize({ status: "synced" });

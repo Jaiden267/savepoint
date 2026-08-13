@@ -1,62 +1,48 @@
 import type { Metadata } from "next";
-import { Compass } from "lucide-react";
-import { listDiscoverGames } from "@/server/services/game-catalogue";
-import { PosterGrid } from "@/components/games/poster-grid";
-import { IgdbAttribution } from "@/components/games/igdb-attribution";
-import { EmptyState } from "@/components/common/empty-state";
-import { LinkButton } from "@/components/common/link-button";
+import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/common/page-header";
-import { Pagination } from "@/components/common/pagination";
+import { IgdbAttribution } from "@/components/games/igdb-attribution";
+import { PosterGridSkeleton } from "@/components/games/poster-grid";
+import { DiscoverShuffleButton } from "@/components/games/discover-shuffle-button";
+import { discoverSeedSchema } from "@/lib/validation/games";
+import { DiscoverResults } from "./discover-results";
 
+// Every ?seed= variant declares the bare path as canonical, so crawlers
+// consolidate rather than crawl-budgeting every random seed as its own
+// page — see docs/PINECONE.md's "Discover page" section.
 export const metadata: Metadata = {
   title: "Discover",
+  alternates: { canonical: "/discover" },
 };
 
 interface Props {
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ seed?: string }>;
 }
 
-function parsePage(raw: string | undefined): number {
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+function freshSeed(): number {
+  return crypto.getRandomValues(new Uint32Array(1))[0];
 }
 
 export default async function DiscoverPage({ searchParams }: Props) {
-  const { page: pageParam } = await searchParams;
-  const page = parsePage(pageParam);
-  const { games, hasMore } = await listDiscoverGames({ page });
+  const { seed: seedParam } = await searchParams;
+  const parsedSeed = discoverSeedSchema.safeParse(seedParam);
+  if (!parsedSeed.success) {
+    // No (or an invalid) seed — canonicalize to a fresh one before
+    // rendering anything, so every real render is a pure function of the
+    // URL. Every subsequent "Shuffle games" click, and every Back/
+    // Forward through shuffle history, lands on a URL that already
+    // carries its own seed.
+    redirect(`/discover?seed=${freshSeed()}`);
+  }
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10">
-      <PageHeader title="Discover" />
+      <PageHeader title="Discover" action={<DiscoverShuffleButton />} />
 
-      {games.length === 0 ? (
-        <EmptyState
-          icon={Compass}
-          title="No games yet"
-          description="Search for a game to start building the catalogue."
-          action={<LinkButton href="/search">Search games</LinkButton>}
-        />
-      ) : (
-        <>
-          <PosterGrid
-            games={games.map((game) => ({
-              slug: game.slug,
-              name: game.name,
-              coverImageId: game.cover_image_id,
-              releaseYear: game.release_date
-                ? new Date(game.release_date).getUTCFullYear()
-                : null,
-              source: "local" as const,
-            }))}
-          />
-          <Pagination
-            page={page}
-            hasMore={hasMore}
-            makeHref={(p) => `/discover?page=${p}`}
-          />
-        </>
-      )}
+      <Suspense key={parsedSeed.data} fallback={<PosterGridSkeleton />}>
+        <DiscoverResults seed={parsedSeed.data} />
+      </Suspense>
 
       <IgdbAttribution className="mt-10" />
     </main>

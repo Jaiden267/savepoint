@@ -3,9 +3,8 @@ import { searchGames } from "@/server/services/game-catalogue";
 import { searchGamesSemantic } from "@/server/services/semantic-search";
 import { createClient } from "@/lib/supabase/server";
 import { getClientIdentifier } from "@/lib/auth/request-ip";
-import { GRID_CLASSES, PosterGrid } from "@/components/games/poster-grid";
-import { PosterCard } from "@/components/games/poster-card";
-import { CatalogueResultCard } from "@/components/games/catalogue-result-card";
+import { PosterGrid } from "@/components/games/poster-grid";
+import { GameResultGrid } from "@/components/games/game-result-grid";
 import { EmptyState } from "@/components/common/empty-state";
 import type { SearchMode } from "./search-mode";
 
@@ -56,38 +55,10 @@ export async function SearchResults({
         </p>
       ) : null}
       {mode === "semantic" ? (
-        // Mixed grid, one item per Pinecone hit in its own rank order —
-        // a cached result (source: "local") renders as the normal
-        // PosterCard/Link; a catalogue-only result (source: "igdb", only
-        // ever produced by the semantic path — see
-        // semantic-search.ts's toCatalogueResult) renders as the
-        // POST-based CatalogueResultCard instead of a GET-triggering
-        // Link, since this is exactly the surface docs/PINECONE.md's
-        // "on-demand import boundary" section is about. Never two
-        // separately-ordered grids — Pinecone's combined rank order is
-        // preserved across both card types.
-        <div className={GRID_CLASSES}>
-          {results.map((result) =>
-            result.source === "local" ? (
-              <PosterCard
-                key={`local-${result.slug}`}
-                slug={result.slug}
-                name={result.name}
-                coverImageId={result.coverImageId}
-                releaseYear={result.releaseYear}
-                source="local"
-              />
-            ) : (
-              <CatalogueResultCard
-                key={`igdb-${result.igdbId}`}
-                igdbId={result.igdbId}
-                name={result.name}
-                coverImageId={result.coverImageId}
-                releaseYear={result.releaseYear}
-              />
-            ),
-          )}
-        </div>
+        // Pinecone's own rank order is preserved as-is — never re-ranked
+        // the way lexical results are, and never split into two
+        // separately-ordered grids.
+        <GameResultGrid results={results} />
       ) : (
         <PosterGrid
           games={results.map((result) => ({

@@ -1810,6 +1810,244 @@ Not committed, not pushed — this fix work and the completed catalogue
 sync remain in the working tree pending explicit commit/push
 authorization.
 
+## Discover page — broad-catalogue random discovery (2026-08-13)
+
+`/discover` previously queried the Supabase `games` table directly
+(`listDiscoverGames`, ordered by `igdb_rating_count`), so it only ever
+showed games some user had already opened or a prior backfill had
+cached — none of Prompt 7C's 26,676-game synced catalogue was reachable
+from it. This redesign samples genuinely at random from the full synced
+catalogue, reusing every piece of Prompt 7C's existing infrastructure
+(the ledger, Pinecone metadata, the POST-based import boundary, the
+mixed cached/catalogue-only rendering `/search` already shipped) rather
+than inventing a parallel path.
+
+### Why not `ORDER BY random()`
+
+`igdb_catalogue_sync` (26,676 rows, currently all `status='synced'`) has
+no index covering `status='synced'` — only a partial index on
+`pending`/`failed`. `ORDER BY random() LIMIT N` there would force a full
+sequential scan + sort of the table on _every_ page load and _every_
+shuffle click, from an unauthenticated, repeatable-clicking surface —
+exactly the cost shape the "don't scan/transfer the whole ledger"
+constraint exists to prevent, and one that only gets worse as the
+catalogue grows.
+
+### The keyset-seek algorithm
+
+`src/server/services/discover-catalogue.ts`'s `listDiscoverCatalogue`:
+
+1. Two parallel bounds queries — `min(igdb_id)`/`max(igdb_id)` among
+   `status='synced'` rows (`.select("igdb_id").order(...).limit(1)`,
+   ascending and descending — the same no-native-aggregate idiom used
+   elsewhere in this codebase, since PostgREST has no `MIN()`/`MAX()`).
+2. A seeded PRNG (mulberry32, `src/lib/random/seeded-random.ts`, seeded
+   from the URL's `?seed=`) picks 4 random threshold values in
+   `[min, max]`.
+3. 4 parallel keyset queries: `.eq("status","synced").gte("igdb_id",
+threshold).order("igdb_id",{ascending:true}).limit(8)` — each a real
+   indexed range-scan seek off the `igdb_id` primary key, not a full-table
+   sort. The primary-key portion of this seek is an indexed `O(log n)`
+   descent to the threshold; the accompanying `status` filter isn't
+   covered by a composite index, so it's evaluated row-by-row against the
+   scan and can inspect (never fetch via a separate index) some
+   non-matching rows before the `LIMIT` accumulates — bounded by `LIMIT`,
+   not a blanket `O(k)` claim, and at the catalogue's current
+   near-100%-synced state this filter is close to a no-op in practice.
+4. **Deterministic wrap-around**: a window returning fewer than 8 rows
+   (threshold near `max`, nothing left above it) gets exactly one
+   supplemental query wrapping to the _global_ `min` — never a new random
+   point, so the same seed always makes the same wrap decision.
+5. Ids are deduped into a `Set` (the identity mechanism — window overlap
+   just reduces unique count, never an error) and Fisher–Yates shuffled
+   by the same seeded PRNG.
+6. **Hydration determines the real count, not the raw id count**: one
+   Pinecone `namespace.fetch({ids})` (canonical ids via
+   `buildCatalogueRecordId`, see below) plus one `games`
+   `.in("igdb_id", ids)` lookup, mirroring `semantic-search.ts`'s
+   existing hydration pattern exactly (`games` row present → cached
+   result with its real stored slug; absent but Pinecone metadata passes
+   `pineconeCatalogueRecordSchema` → catalogue-only result; neither →
+   dropped). A raw pool of 32 ids can still hydrate to fewer than 20
+   valid results if enough records are missing from Pinecone or fail
+   validation — this is why the next step keys off the _hydrated_ count,
+   not the raw id count.
+7. **Bounded post-hydration refill**: if hydration yields fewer than 20
+   valid results, exactly one more round draws 2 more threshold windows
+   (continuing the same seeded PRNG stream, still deterministic),
+   excluding every id already attempted in round 1, and hydrates only the
+   new ids. This runs at most once, ever, per request — never a retry
+   loop.
+8. **Three outcomes, not two**: ≥20 valid results renders normally; 1–19
+   valid results _after_ the bounded refill renders exactly what's valid
+   with an honest "showing fewer games than usual" notice — **never**
+   the cached-only fallback, since window overlap, wrap-around, and an
+   imperfect refill are all handled in-band, not treated as failures; 0
+   valid results, or a genuine ledger/Pinecone read error, is the _only_
+   trigger for falling back to `listDiscoverGames` (repurposed —
+   unchanged functionally, now Discover's degraded-mode fallback instead
+   of its primary source).
+
+Explicit ceilings, none of them loose targets: 4 initial windows + ≤4
+wrap-arounds + 2 refill windows + ≤2 refill wrap-arounds = ≤14 total
+ledger queries; ≤2 hydration rounds (one Pinecone fetch + one `games`
+lookup each). No per-card request anywhere.
+
+**Accepted, documented tradeoff**: a random threshold _value_ isn't
+perfectly uniform across _rows_ — dense id-clusters (e.g. a franchise's
+platform ports, often imported with adjacent ids) are proportionally
+slightly under-represented relative to isolated ids. Correct trade for
+staying scan-free and migration-free at this scale; it mildly _helps_
+avoid one franchise dominating a selection, since a whole adjacent-id
+cluster is less likely to all land in the same draw.
+
+### The diversity pass is separate from sampling, and says so
+
+Keyset sampling produces variety in _which_ games appear across
+different seeds — it says nothing about franchise/year/platform spread
+_within_ one selection. `applyDiversityPass` is an explicit, separate,
+bounded pass over the hydrated pool: candidates with both artwork and a
+release year present are stably preferred first, then a greedy walk
+respects small per-franchise/year/platform caps (~3/~4/~5) _where
+possible_. If the pool can't fill the target while respecting caps, it
+relaxes and takes the next candidate anyway — **a preference over order,
+never a hard filter**: no valid candidate is ever dropped, and the
+target is never missed, purely to enforce diversity. Franchise grouping
+(a normalized first-two-words key, via the existing `normalizeGameName`)
+never influences identity — two distinct `igdb_id`s sharing a title
+always both stay in the pool and can both appear.
+
+### Canonical Pinecone record ids
+
+No shared id builder existed before this — `sync.ts` inlined
+`` `igdb-${igdbId}` `` directly at its one call site. Extracted into
+`buildCatalogueRecordId` (`src/lib/pinecone/constants.ts`, alongside
+`PINECONE_NAMESPACE`/`PINECONE_SCHEMA_VERSION`), and `sync.ts` updated to
+use it — the one canonical place this string shape is built, so
+discover-catalogue.ts (and any future caller) never reconstructs the
+`igdb-` prefix ad hoc.
+
+### Admin-client boundary — narrow, read-only, documented
+
+`igdb_catalogue_sync` has zero RLS grants for anon/authenticated by
+design (server-only bookkeeping, same posture as `game_vector_sync`) —
+reading it to power a public page necessarily means either the admin
+client or a new grant. `discover-catalogue.ts` uses the admin client,
+narrowly: `import "server-only"` as the first import; every ledger query
+selects **exactly** `igdb_id`, never any other column; every operation in
+the module is read-only (no insert/update/delete/upsert anywhere,
+covered by tests asserting zero write calls on every mock across every
+code path); the admin client itself never appears in any exported return
+type. This is treated as safe and narrower than the alternatives: the
+data exposed (an already-public IGDB game's id) isn't sensitive or
+user-scoped; there's existing precedent for the admin client serving a
+normal request mid-flight (`game-sync.ts`'s `upsertGameFromIgdbDetail`,
+triggered by an ordinary page view); a new RLS grant would be broader
+than needed for a table whose whole design intent is service-role-only;
+and a `SECURITY DEFINER` RPC would need its own migration and duplicate
+PRNG logic in SQL that's easier to keep in TypeScript next to the
+client-side seed generator. No migration was needed anywhere in this
+feature — `igdb_id`'s existing primary-key index (ledger) and
+unique-constraint index (`games`) are sufficient at the current ~27k-row
+scale for both the keyset seek and the batch hydration lookup.
+
+### Abuse and cost control
+
+A new, **separately-keyed** rate limit, `checkDiscoverRateLimit`
+(`discover:${clientId}`, 15/60s, `src/server/services/game-catalogue.ts`
+alongside the existing `checkImportRateLimit`/`checkCatalogueImportRateLimit`)
+— shares no budget with the `game-import`/`catalogue-import` buckets, so
+repeated shuffling can never weaken the on-demand-import budget (tested
+directly, both directions). Checked inside `listDiscoverCatalogue`
+itself (mirroring `searchGamesSemantic`'s existing internal check),
+_after_ a same-seed cache lookup, never before: `getCachedSearch`/
+`setCachedSearch` (the existing `src/lib/igdb/search-cache.ts` module,
+reused as-is, keyed `discover:${seed}`, a distinct prefix from IGDB text
+search's own entries) is checked **first** — a cache hit returns
+immediately with zero ledger/Pinecone/games calls and never even
+consults the rate limiter, so reload/Back/Forward/duplicate tabs on an
+already-computed seed cost no quota. Only a _genuine_ successful
+selection (full or reduced) is cached — a fallback/error outcome is
+never pinned under the seed key, so a transient failure self-heals on
+the next request instead of being stuck for the TTL.
+
+### Preventing infinite crawlable URL variants
+
+Every `?seed=` value is a distinct URL — `/discover`'s `metadata` gains
+`alternates: { canonical: "/discover" }` so crawlers consolidate every
+seed variant onto the bare path rather than crawl-budgeting each one as
+its own page. "Shuffle games" is a single real `<button>` (a narrow
+client component, `discover-shuffle-button.tsx`) that generates one
+fresh `crypto.getRandomValues` seed and does `router.push` (not
+`replace`, so Back/Forward steps through shuffle history) — never a
+crawlable `<a href>` per seed.
+
+### Stability and hydration-mismatch safety
+
+`/discover` with no (or an invalid) `?seed=` does a `redirect()` to a
+freshly-generated seed before rendering anything — every real render is
+therefore a pure, deterministic function of the URL's seed. This
+structurally guarantees the "no reshuffling on rerender" and "no
+hydration mismatch" requirements: zero `Math.random()`/`Date.now()` ever
+runs during the render that produces the initial HTML (all randomness is
+either server-side and seed-derived, or confined to the shuffle button's
+one `onClick` handler, which only ever triggers a fresh navigation, never
+a client-side re-render of the existing grid).
+
+### Cached vs. catalogue-only cards — shared, not duplicated
+
+The mixed-grid JSX previously inline in `/search`'s semantic-mode
+rendering (`PosterCard` for `source:"local"`, `CatalogueResultCard` for
+`source:"igdb"`) is extracted into `GameResultGrid`
+(`src/components/games/game-result-grid.tsx`), used by both `/search`
+and `/discover` — no behavior change to `/search`, confirmed by its
+existing tests passing unchanged. Catalogue-only results still go
+through the existing `importCatalogueGameAction` POST boundary,
+redirecting to the freshly-imported row's real slug — never a
+client-guessed URL.
+
+### Files
+
+New: `src/lib/random/seeded-random.ts`,
+`src/server/services/discover-catalogue.ts`,
+`src/components/games/game-result-grid.tsx`,
+`src/components/games/discover-shuffle-button.tsx`,
+`src/app/discover/discover-results.tsx`. Modified:
+`src/app/discover/page.tsx` (seed validation/redirect, shuffle button in
+`PageHeader`'s action slot, canonical metadata, old prev/next pagination
+removed), `src/app/search/search-results.tsx` (uses the extracted
+`GameResultGrid`), `src/lib/pinecone/constants.ts`/`sync.ts`
+(`buildCatalogueRecordId`), `src/lib/validation/games.ts`
+(`discoverSeedSchema`), `src/server/services/game-catalogue.ts`
+(`checkDiscoverRateLimit`; `listDiscoverGames` repurposed as the
+fallback, functionally unchanged).
+
+Not committed, not pushed. No catalogue discovery/sync was run; no
+Pinecone index was touched; no migration was created.
+
+### Manual verification (user, browser, 2026-08-13): PASSED
+
+- `/discover` redirects to a stable seeded URL.
+- ~20–24 unique games render from the broad synced catalogue, including
+  catalogue-only games not previously cached.
+- "Shuffle games" changes both the seed and the displayed selection.
+- Browser Back restores the previous seed and selection, in the same
+  order — confirming the seeded-determinism design holds under real
+  browser history navigation, not just in tests.
+- Cached games open through their real stored slug; catalogue-only games
+  use the POST import boundary and redirect successfully to
+  `/games/<slug>`.
+- Imported game pages show genuine IGDB metadata — no fabricated
+  ratings, reviews, or activity.
+- Keyboard navigation works for the shuffle button and game cards.
+- Mobile layout has no horizontal overflow.
+- No unexpected browser-console errors.
+
+**The broad-catalogue random Discover feature is complete**, with both
+automated verification (659/660 tests, lint/typecheck/format/build/
+verify-standalone all clean — see above) and this manual browser pass
+green. Still not committed, not pushed.
+
 ### ZimaOS scheduling (documented only — not wired)
 
 Once past initial catalogue sync, `incremental`/`release-check` are

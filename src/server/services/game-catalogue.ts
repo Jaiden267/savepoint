@@ -2,6 +2,7 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { searchIgdbGames } from "@/lib/igdb/search";
 import { rankSearchResults } from "@/lib/igdb/ranking";
+import { checkRateLimit } from "@/lib/rate-limit";
 import type { GameSearchResult } from "@/lib/igdb/types";
 import type { Tables } from "@/types/database";
 
@@ -104,12 +105,34 @@ export async function searchGames(
   );
 }
 
+const DISCOVER_RATE_LIMIT = { limit: 15, windowSeconds: 60 };
+
+/**
+ * Rate-limits /discover page loads and "Shuffle games" clicks —
+ * separately keyed (`discover:${clientId}`) from
+ * checkImportRateLimit/checkCatalogueImportRateLimit's `game-import`/
+ * `catalogue-import` buckets, so repeated shuffling can never share or
+ * weaken the on-demand import budget. 15/60s is generous for normal
+ * browsing while bounding scripted abuse of the ledger/Pinecone reads a
+ * full selection costs — see src/server/services/discover-catalogue.ts.
+ */
+export function checkDiscoverRateLimit(clientId: string) {
+  return checkRateLimit(`discover:${clientId}`, DISCOVER_RATE_LIMIT);
+}
+
 export interface DiscoverPage {
   games: GameRow[];
   hasMore: boolean;
 }
 
-/** Pure local, paginated discovery listing — no IGDB involved, no rate-limit cost. */
+/**
+ * Pure local, paginated listing of already-cached games — no IGDB, no
+ * catalogue ledger, no rate-limit cost. No longer /discover's primary
+ * data source (see discover-catalogue.ts's listDiscoverCatalogue, which
+ * samples the full synced Balanced catalogue instead); this is now used
+ * only as discover-results.tsx's degraded-mode fallback when the ledger
+ * or Pinecone is genuinely unavailable.
+ */
 export async function listDiscoverGames({
   page,
   pageSize = DEFAULT_PAGE_SIZE,

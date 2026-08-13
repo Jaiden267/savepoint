@@ -3,6 +3,7 @@ import {
   gameSlugSchema,
   pineconeCatalogueRecordSchema,
   catalogueImportIgdbIdSchema,
+  discoverSeedSchema,
 } from "./games";
 import { PINECONE_SCHEMA_VERSION } from "@/lib/pinecone/constants";
 
@@ -140,5 +141,41 @@ describe("catalogueImportIgdbIdSchema", () => {
     expect(catalogueImportIgdbIdSchema.safeParse(undefined).success).toBe(
       false,
     );
+  });
+});
+
+describe("discoverSeedSchema", () => {
+  it("accepts zero and a typical positive integer, including as a string (URL search params arrive as strings)", () => {
+    expect(discoverSeedSchema.safeParse(0).success).toBe(true);
+    expect(discoverSeedSchema.safeParse("12345").success).toBe(true);
+  });
+
+  it("accepts the full 32-bit unsigned integer range boundary", () => {
+    expect(discoverSeedSchema.safeParse(0xffffffff).success).toBe(true);
+  });
+
+  it("rejects a value beyond the 32-bit unsigned range", () => {
+    expect(discoverSeedSchema.safeParse(0x100000000).success).toBe(false);
+  });
+
+  it("rejects negative, non-numeric, and non-integer values", () => {
+    expect(discoverSeedSchema.safeParse(-1).success).toBe(false);
+    expect(discoverSeedSchema.safeParse("not-a-number").success).toBe(false);
+    expect(discoverSeedSchema.safeParse(4.5).success).toBe(false);
+  });
+
+  it("rejects undefined (a genuinely missing ?seed= param)", () => {
+    expect(discoverSeedSchema.safeParse(undefined).success).toBe(false);
+  });
+
+  it("coerces null/empty string to 0 — a harmless, still-valid deterministic seed, not a rejection (Number(null) === Number('') === 0); only a genuinely absent param (undefined) skips straight to page.tsx's fresh-seed redirect", () => {
+    expect(discoverSeedSchema.safeParse(null)).toMatchObject({
+      success: true,
+      data: 0,
+    });
+    expect(discoverSeedSchema.safeParse("")).toMatchObject({
+      success: true,
+      data: 0,
+    });
   });
 });

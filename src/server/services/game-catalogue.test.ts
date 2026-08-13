@@ -18,7 +18,13 @@ import {
   searchLocalGames,
   searchGames,
   listDiscoverGames,
+  checkDiscoverRateLimit,
 } from "./game-catalogue";
+import {
+  checkImportRateLimit,
+  checkCatalogueImportRateLimit,
+} from "./game-sync";
+import { _resetRateLimitsForTests } from "@/lib/rate-limit";
 
 function localRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -63,6 +69,7 @@ function mockSelectResult(rows: unknown[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetRateLimitsForTests();
 });
 
 describe("searchLocalGames", () => {
@@ -230,5 +237,35 @@ describe("listDiscoverGames", () => {
     const result = await listDiscoverGames({ page: 1, pageSize: 24 });
 
     expect(result.hasMore).toBe(false);
+  });
+});
+
+describe("checkDiscoverRateLimit", () => {
+  it("allows requests under the limit", () => {
+    expect(checkDiscoverRateLimit("client-a").allowed).toBe(true);
+  });
+
+  it("blocks a client once it exceeds 15 requests in the window, independently of other clients", () => {
+    for (let i = 0; i < 15; i++) {
+      expect(checkDiscoverRateLimit("client-b").allowed).toBe(true);
+    }
+    expect(checkDiscoverRateLimit("client-b").allowed).toBe(false);
+    // A different client's own budget is untouched.
+    expect(checkDiscoverRateLimit("client-c").allowed).toBe(true);
+  });
+
+  it("is keyed separately from the existing import rate limiters — exhausting Discover's budget never touches game-import/catalogue-import for the same client, and vice versa", () => {
+    for (let i = 0; i < 15; i++) checkDiscoverRateLimit("shared-client");
+    expect(checkDiscoverRateLimit("shared-client").allowed).toBe(false);
+    // The existing import limiters (8/60s) for the same clientId are
+    // completely untouched by exhausting Discover's separate bucket.
+    expect(checkImportRateLimit("shared-client").allowed).toBe(true);
+    expect(checkCatalogueImportRateLimit("shared-client").allowed).toBe(true);
+
+    // And the reverse: exhausting the existing import limiters never
+    // weakens Discover's own already-exhausted state, nor grants it back.
+    for (let i = 0; i < 8; i++) checkImportRateLimit("shared-client-2");
+    expect(checkImportRateLimit("shared-client-2").allowed).toBe(false);
+    expect(checkDiscoverRateLimit("shared-client-2").allowed).toBe(true);
   });
 });
