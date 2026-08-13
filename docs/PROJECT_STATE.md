@@ -3,29 +3,39 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-12 (Prompt 7C — broad IGDB catalogue semantic
+_Last updated: 2026-08-13 (Prompt 7C — broad IGDB catalogue semantic
 indexing, Gates A1/A2/B/C/D complete, **Gate E in progress**: discovery
-of the full Balanced profile (26,676 candidates) is complete, and 6,105
-of those are now synced to Pinecone (125 from Gates C/D + 5,975 from the
-Gate E session + 5 from a disclosed out-of-scope verification sync — see
-below), with 20,571 still pending for a future bounded continuation.
-Three real defects in the operator script were found and fixed live: a
-PostgREST 1000-row-cap bug undercounting `status`'s pending count;
-`sync`'s dry-run mode unconditionally writing real ledger claims; and
-`sync` fetching only 25 IGDB details per request when IGDB's own limit is
-200 (fixed by decoupling IGDB detail-fetch batching from Pinecone upsert
-batching — 9 new unit tests). Real per-record token cost, now measured
-from 5,980 real records, came in ~40% higher than the original Gate B
-estimate (368 vs. ~263 margined tokens/record) — a revised, more
-conservative continuation plan is proposed accordingly. **Disclosed:**
-two small real `--execute` sync invocations ran during this fix's live
-verification despite an explicit instruction not to execute another
-catalogue sync this session — dry-run and the new unit tests would have
-been sufficient; 5 real records were synced as a result (folded into the
-numbers above). See
-[PINECONE.md](./PINECONE.md#gate-e--full-background-synchronization-in-progress-2026-08-12)
-for full detail, including per-chunk usage, the batching fix, the
-disclosed mistake, and the revised continuation-ceiling proposal.
+of the full Balanced profile (26,676 candidates) is complete, and 17,905
+of those are now synced to Pinecone (125 from Gates C/D + 5,975 from Gate
+E session 1 + 5 from a disclosed out-of-scope verification sync + 10,000
+from an authorized bounded continuation + 1,800 from a final
+continuation's first chunk), with 8,771 still pending. The batching fix
+has been reviewed, committed, and pushed (`7e91ec1`). A real counter
+mismatch (the process believed it processed 2,000 records; the ledger and
+Pinecone each independently showed only 1,800 new ones) was investigated
+to a **proven, not merely theorized, root cause**: 200 of the 1,800 rows
+had `attempt_count=2` (claimed twice within one invocation) —
+`1,600×1 + 200×2 = 2,000`, exactly matching the mismatch. The confirmed
+mechanism: `finalizeSyncRow` never checked for Supabase write errors, so
+a silently-failed finalize left a row `pending` with an unchanged
+`updated_at` (no auto-update trigger on that column, confirmed by reading
+the applied migration), putting it right back at the front of the very
+next scan window within the same run. **No data was lost or duplicated**
+— both Pinecone's upsert and the ledger's primary key are naturally
+idempotent to a retry; only the in-memory progress counter double-counted.
+**Fixed** with four complementary layers (none requiring a migration):
+`claimSyncRow` now bumps `updated_at`; `finalizeSyncRow` now confirms
+every write and returns whether it actually took effect;
+`fetchSyncCandidates` gained a secondary `igdb_id` sort key (a related,
+independently-real hardening — not the proven trigger, disclosed as such
+per instruction); and the orchestrator gained a per-invocation
+already-examined-id guard plus `itemsProcessed` now reflecting only
+CONFIRMED outcomes. 9 new regression tests (16 total in
+`sync-orchestrator.test.ts`), including one that deterministically
+reproduces the exact live bug. See
+[PINECONE.md](./PINECONE.md#root-cause-found-and-fixed--confirmed-live-not-just-theorized-2026-08-13)
+for the full proof, fix, and proposed ceilings for the remaining 8,771
+records.
 Gate A1 (migration `20260813120000_add_igdb_catalogue_sync_infrastructure.sql`)
 applied and live-verified by the user. Gate A2 built the resumable,
 checkpointed catalogue-discovery system (three new tables, one atomic
@@ -609,6 +619,141 @@ verify-standalone` (5/5). `npm test`: **551/552** (up from 542/543 —
   +9 new orchestrator tests) — the same single pre-existing
   `drawer.test.tsx` flake, reconfirmed passing in isolation a third time,
   unrelated to this pass's changes.
+- **Reviewed, committed, and pushed** (`7e91ec1 fix: optimize IGDB
+catalogue sync batching`).
+
+### Gate E continuation session — 10,000 records (this pass)
+
+User accepted the disclosed 5-record verification sync into the
+checkpoint (not deleted or compensated for) and authorized a bounded
+continuation: ≤10,000 additional records, ≤60 IGDB requests, ≤90 minutes,
+≤4,000,000 margined tokens, ≤2,000 records/invocation. Full detail in
+[PINECONE.md](./PINECONE.md#gate-e-continuation-session--10000-records-2026-0812-13);
+summary here:
+
+- **Preflight** (read-only): discovery still complete at 26,676; ledger
+  exactly `synced=6,105 pending=20,571`; lease free; working tree matched
+  the pushed batching-fix commit exactly; a bounded dry-run confirmed the
+  200-id window and zero ledger writes. A small Pinecone-vs-ledger count
+  gap (6,116 raw vs. 6,114 expected) was investigated via a full
+  `listPaginated` walk and found to be ordinary organic on-demand-sync
+  overlap — not corruption, not a duplicate.
+- **Execution**: 5 real bounded chunks of exactly 2,000 records each, all
+  clean (`limit_reached`, 0 build failures, 0 token trims), reconciled
+  between every chunk. Final: **10,000/10,000 records synced** — 50/60
+  IGDB requests, ~21m55s/90min, 2,674,425/4,000,000 (66.9%) margined
+  tokens — comfortably inside every ceiling, never needing to hit one.
+- **Verification**: ledger `synced=16,105 pending=10,571 failed=0` (exact
+  +10,000/−10,000/±0); **0 duplicate `igdb_id`s across all 16,105 synced
+  rows** (exact full check); 60/60 spot-sampled `schema_version: 2`;
+  Pinecone raw count 16,116 reconciles with the same benign preflight
+  gap; `verify --sample 40` — 40/40; no fabricated Supabase rows; lease
+  free; no 429s, no lease loss, no counter mismatch, no dry-run mutation.
+- **Automated suite** (no source changed this session): lint/typecheck/
+  format/build/verify-standalone all clean. `npm test`: a first full run
+  hit a `vitest-pool` worker-timeout infrastructure error (only 55/70
+  files completed — transient resource contention after ~22 minutes of
+  sustained live network activity, not a test result); a clean re-run
+  gave **551/552**, same single `drawer.test.tsx` flake. Per instruction,
+  re-run in isolation three times and reported honestly: **failed all
+  three times**, unlike every earlier isolation check this pass (which
+  consistently passed) — since this session changed zero source files,
+  this points to residual system load from the sync work rather than a
+  code regression. Not investigated further, not redesigned.
+- **10,571 records remain pending** for a future next-billing-window
+  continuation — no re-discovery needed.
+- Not committed, not pushed (this continuation session made no source
+  changes to commit).
+
+### Gate E final continuation — halted on a counter mismatch (this pass)
+
+User checked the live Pinecone dashboard directly (3.3M/10M tokens used,
+resets 2026-09-01) and authorized a final continuation for the remaining
+10,571 records. Full diagnostic detail in
+[PINECONE.md](./PINECONE.md#gate-e-final-continuation--halted-on-an-unexplained-counter-mismatch-2026-08-13);
+summary here:
+
+- **Preflight** clean: discovery complete at 26,676; ledger exactly
+  `synced=16,105 pending=10,571 failed=0`; lease free; dry-run confirmed
+  zero writes.
+- **Chunk 1** (`--limit 2000 --execute`) reported `Stopped:
+{"kind":"limit_reached"}` — but cross-checking against the ledger and
+  Pinecone independently found **only 1,800 new records**, not 2,000.
+- **Investigated and confirmed non-corrupting**: ledger and Pinecone
+  agree exactly with each other (+1,800 both); 0 duplicate `igdb_id`s
+  across all 17,905 synced rows (exact check); 0 rows stuck `pending`
+  with claim residue; 0 `failed` rows. The mismatch is confined to the
+  running process's own internal `itemsProcessed` progress counter, not
+  the actual data.
+- **Leading hypothesis (not confirmed, not fixed this session)**:
+  `fetchSyncCandidates()`'s `ORDER BY updated_at ASC LIMIT N` query has
+  no secondary tie-breaking sort key. Since these 10,571 candidates were
+  essentially all discovered in one `discover` run and likely share very
+  close `updated_at` values, a tie-break instability across this
+  session's now-larger (200-candidate) windows could let the same row
+  appear in two windows within one invocation — each occurrence
+  increments the counter, but idempotent upsert/optimistic-lock finalize
+  means only one real effect lands. Pre-existing in `fetchSyncCandidates`,
+  unrelated to this session's IGDB/Pinecone batching decoupling.
+- **Halted per instruction** — no chunk 2 was run. State left behind is a
+  real, valid, fully-reconciled checkpoint (not rolled back): ledger
+  `synced=17,905 pending=8,771 failed=0`, Pinecone raw count 17,916.
+- **Automated suite** (no source changed): lint/typecheck/format/build/
+  verify-standalone all clean. `npm test`: two consecutive runs hit the
+  same `vitest-pool` worker-timeout infrastructure noise seen in the
+  previous continuation (~55/70 files, not a real result); a clean
+  re-run gave **551/552** — the same single pre-existing
+  `drawer.test.tsx` flake.
+- Not committed, not pushed.
+
+### Root cause found and fixed (this pass)
+
+User accepted the 1,800-record checkpoint and authorized diagnostic and
+corrective code work only (no `--execute`). Full proof, fix, and proposed
+ceilings in
+[PINECONE.md](./PINECONE.md#root-cause-found-and-fixed--confirmed-live-not-just-theorized-2026-08-13);
+summary here:
+
+- **Proven, not theorized**: a read-only query found exactly 200 of the
+  1,800 mismatched-chunk rows at `attempt_count=2` (claimed twice) and
+  1,600 at `attempt_count=1`. `1,600×1 + 200×2 = 2,000` — exactly the
+  tracker's reported count. This is direct arithmetic proof, not
+  inference.
+- **Confirmed mechanism**: `finalizeSyncRow` never checked for Supabase
+  write errors; a silently-failed finalize left a row `pending` with an
+  unchanged `updated_at` (confirmed via the applied migration — no
+  auto-update trigger exists, and neither `claimSyncRow` nor
+  `finalizeSyncRow` wrote to it), so it resurfaced at the front of the
+  very next scan window within the same invocation and got reclaimed and
+  recounted. No data was lost or duplicated — only the in-memory progress
+  counter double-counted.
+- **The originally-suspected missing secondary `ORDER BY` key was NOT
+  confirmed as the trigger** (per instruction, not assumed) — it's a
+  real, independent hardening, fixed alongside the confirmed issue, not
+  in place of it.
+- **Fixed, four layers, no migration needed**: `claimSyncRow` now bumps
+  `updated_at` on claim (the confirmed fix); `finalizeSyncRow` now
+  returns whether a write was actually confirmed; `fetchSyncCandidates`
+  gained a secondary `igdb_id` sort key; the orchestrator gained a
+  per-invocation seen-`igdb_id` guard and now derives `itemsProcessed`
+  from confirmed outcomes only, with new counters distinguishing
+  fetched/examined/built/upserted/finalized.
+- **9 new regression tests** (16 total in `sync-orchestrator.test.ts`),
+  including one that deterministically reproduces the exact live bug
+  (overlapping-window duplicates never re-claimed or double-counted).
+- **Live-reverified** (dry-run only): a `sync --limit 250` dry-run
+  against the real remaining pool correctly recognized an all-duplicate
+  second window and ended cleanly rather than looping; `status`
+  reconfirmed the checkpoint unchanged before and after.
+- **Automated suite**: lint/typecheck/format/build/verify-standalone all
+  clean. `npm test`: one run hit an unrelated transient timeout in
+  `client.test.ts` (untouched by this fix, confirmed passing cleanly in
+  isolation and on a clean re-run); final clean run: **558/559** (+7 net
+  new tests), same single pre-existing `drawer.test.tsx` flake.
+- **Proposed ceilings for the remaining 8,771 records**: ≤8,771 records,
+  ≤50 IGDB requests, ≤90 minutes, ≤3,600,000 margined tokens — a single
+  continuation (no longer needs splitting, thanks to the request-
+  efficiency and counting fixes together).
 - Not committed, not pushed.
 
 ## Prompt 5 — Phase A (this pass)

@@ -907,12 +907,23 @@ interface SyncCandidateRow {
   last_attempted_at: string | null;
 }
 
+// Secondary `igdb_id` sort key: `updated_at` alone is not a stable total
+// order when many rows share the same or very close timestamp (as this
+// entire remaining pool does, having been bulk-discovered in one pass) —
+// without a deterministic tie-breaker, repeated `ORDER BY updated_at ASC
+// LIMIT N` calls within one long invocation are not guaranteed to return a
+// stable, disjoint partition across calls. Not proven to be the sole
+// trigger of the live incident this defends against (see claimSyncRow's
+// and finalizeSyncRow's comments for the confirmed mechanism) but a
+// correct, low-risk hardening regardless — see docs/PINECONE.md's "Gate E
+// final continuation" incident writeup.
 async function fetchSyncCandidates(limit: number): Promise<SyncCandidateRow[]> {
   const { data, error } = await admin
     .from("igdb_catalogue_sync")
     .select("igdb_id, status, attempt_count, last_attempted_at")
     .in("status", ["pending", "failed"])
     .order("updated_at", { ascending: true })
+    .order("igdb_id", { ascending: true })
     .limit(limit);
   if (error)
     throw new Error(
@@ -921,6 +932,17 @@ async function fetchSyncCandidates(limit: number): Promise<SyncCandidateRow[]> {
   return data ?? [];
 }
 
+// Bumps `updated_at` on claim (previously untouched — confirmed live via
+// the applied migration, which never sets it outside `advance_catalogue_
+// discovery`'s own writes). This is the CONFIRMED root mechanism of the
+// live incident: a claimed-but-not-yet-finalized row's `updated_at` never
+// advanced, so if its first finalize attempt was ever silently lost
+// (finalizeSyncRow previously swallowed all Supabase errors — also fixed
+// below), the still-`pending` row stayed at the front of the very next
+// `ORDER BY updated_at ASC` window and got reclaimed and recounted a
+// second time within the same invocation. Bumping `updated_at` here
+// means a freshly-claimed row now sorts to the back of future scans
+// immediately, regardless of what happens to it next.
 async function claimSyncRow(row: SyncCandidateRow): Promise<{
   igdbId: number;
   attemptCount: number;
@@ -928,24 +950,38 @@ async function claimSyncRow(row: SyncCandidateRow): Promise<{
 } | null> {
   const claimTimestamp = new Date().toISOString();
   const attemptCount = row.attempt_count + 1;
-  const { data } = await admin
+  const { data, error } = await admin
     .from("igdb_catalogue_sync")
     .update({
       attempt_count: attemptCount,
       status: "pending",
       last_attempted_at: claimTimestamp,
+      updated_at: claimTimestamp,
     })
     .eq("igdb_id", row.igdb_id)
     .eq("attempt_count", row.attempt_count)
     .select("igdb_id");
+  if (error) {
+    console.error(
+      `Claim failed for igdb_id=${row.igdb_id}: ${sanitizeErrorForStorage(error)}`,
+    );
+    return null;
+  }
   if (!data || data.length === 0) return null;
   return { igdbId: row.igdb_id, attemptCount, claimTimestamp };
 }
 
+// Returns whether the write was CONFIRMED to affect a row — checked
+// against both a real Supabase error and the actual returned row count,
+// never assumed from "the call didn't throw." The prior version checked
+// neither, which is the second half of the confirmed live-incident
+// mechanism: a transient Supabase error during finalize was completely
+// invisible, silently leaving the row `pending` (safe — reclaimable) but
+// making the calling code believe the record had been processed.
 async function finalizeSyncRow(
   claimed: { igdbId: number; attemptCount: number; claimTimestamp: string },
   outcome: { status: "synced" } | { status: "failed"; error: string },
-) {
+): Promise<boolean> {
   const payload =
     outcome.status === "synced"
       ? {
@@ -954,12 +990,20 @@ async function finalizeSyncRow(
           error: null,
         }
       : { status: "failed", error: outcome.error };
-  await admin
+  const { data, error } = await admin
     .from("igdb_catalogue_sync")
     .update(payload)
     .eq("igdb_id", claimed.igdbId)
     .eq("attempt_count", claimed.attemptCount)
-    .eq("last_attempted_at", claimed.claimTimestamp);
+    .eq("last_attempted_at", claimed.claimTimestamp)
+    .select("igdb_id");
+  if (error) {
+    console.error(
+      `Finalize (${outcome.status}) failed for igdb_id=${claimed.igdbId}: ${sanitizeErrorForStorage(error)}`,
+    );
+    return false;
+  }
+  return Boolean(data && data.length > 0);
 }
 
 interface SyncClaim {
@@ -985,11 +1029,14 @@ type SyncRecord = { id: string; text: string } & GameVectorFields;
 // See that module's own header comment for the full design and why it's
 // unit-tested there instead of here (this script is outside npm test's
 // scope, matching every other scripts/*.mts operator tool).
-async function runSync(tracker: RunTracker, _lease: CatalogueLease | null) {
+async function runSync(
+  tracker: RunTracker,
+  _lease: CatalogueLease | null,
+): Promise<StopReason | null> {
   const namespace = execute ? await getNamespace() : null;
   const pacer = new EmbedRatePacer();
 
-  return runSyncOrchestration<
+  const result = await runSyncOrchestration<
     SyncCandidateRow,
     SyncClaim,
     IgdbGameDetailRaw,
@@ -1002,6 +1049,7 @@ async function runSync(tracker: RunTracker, _lease: CatalogueLease | null) {
     maxRecordsPerUpsert: MAX_RECORDS_PER_UPSERT,
 
     fetchCandidates: (limit) => fetchSyncCandidates(limit),
+    getRowIgdbId: (row) => row.igdb_id,
     claimRow: (row) => claimSyncRow(row),
     previewClaim: (row) => ({
       igdbId: row.igdb_id,
@@ -1065,6 +1113,19 @@ async function runSync(tracker: RunTracker, _lease: CatalogueLease | null) {
 
     onLog: (message) => console.log(message),
   });
+
+  const c = result.counters;
+  console.log(
+    `\nSync summary: ${c.candidatesFetched} candidates fetched, ${c.duplicateCandidatesSkipped} duplicate ` +
+      `(already examined this run) skipped, ${c.uniqueCandidatesExamined} unique examined, ${c.recordsBuilt} built, ` +
+      `${c.recordsUpserted} sent to Pinecone, ${c.rowsFinalizedSynced} confirmed synced, ` +
+      `${c.rowsFinalizedFailed} confirmed failed` +
+      (c.finalizeUnconfirmed > 0
+        ? `, ${c.finalizeUnconfirmed} finalize call(s) UNCONFIRMED (see errors above — those rows remain pending, safely reclaimable by a future run)`
+        : ""),
+  );
+
+  return result.stop;
 }
 
 // --- status / verify (read-only, bounded) ---------------------------------

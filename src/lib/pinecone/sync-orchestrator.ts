@@ -47,6 +47,8 @@ export interface SyncOrchestratorDeps<
   maxRecordsPerUpsert: number;
 
   fetchCandidates(limit: number): Promise<TRow[]>;
+  /** Extracts the igdb_id from a freshly-fetched row, before any claim — used for the per-invocation duplicate guard below. */
+  getRowIgdbId(row: TRow): number;
   /** Real Supabase claim (optimistic-lock write) — only called when `execute`. */
   claimRow(row: TRow): Promise<TClaim | null>;
   /** Dry-run preview claim — no write, reuses the row's already-fetched state. */
@@ -57,8 +59,22 @@ export interface SyncOrchestratorDeps<
   fetchDetails(ids: number[]): Promise<Map<number, TRaw>>;
   buildRecord(claim: TClaim, raw: TRaw): { record: TRecord; charCount: number };
 
-  finalizeSynced(claim: TClaim): Promise<void>;
-  finalizeFailed(claim: TClaim, error: string): Promise<void>;
+  /**
+   * Real Supabase finalize writes — only called when `execute`. Return
+   * `true` only when the write is CONFIRMED to have affected the row
+   * (checked against the database response, not merely "the call didn't
+   * throw"). A confirmed-false or thrown-and-caught outcome must never be
+   * silently treated as success — see `itemsProcessed`'s doc comment on
+   * `SyncTracker` for why this matters: a live incident showed a silently
+   * swallowed finalize error let the same igdb_id get claimed and counted
+   * twice within one invocation, inflating the tracker's progress count
+   * relative to what the ledger and Pinecone actually recorded (see
+   * scripts/igdb-catalogue-sync.mts's "sync" section and
+   * docs/PINECONE.md's "Gate E final continuation" incident writeup for
+   * the full proof).
+   */
+  finalizeSynced(claim: TClaim): Promise<boolean>;
+  finalizeFailed(claim: TClaim, error: string): Promise<boolean>;
 
   /** Real Pinecone upsert (including any rate-pacer wait) — only called when `execute`. */
   upsertBatch(records: TRecord[], marginedTokens: number): Promise<void>;
@@ -69,6 +85,32 @@ export interface SyncOrchestratorDeps<
   ceilingStop: TStopReason;
 
   onLog?(message: string): void;
+}
+
+/**
+ * Distinct progress counters, kept separate on purpose (see the live
+ * incident referenced on `finalizeSynced` above): "fetched" and "examined"
+ * count raw query/dedup activity; "built"/"upserted" count real external
+ * writes attempted; "finalized" counts only CONFIRMED ledger outcomes.
+ * `itemsProcessed` (on the tracker, driving `--limit`) is kept exactly
+ * equal to `rowsFinalizedSynced + rowsFinalizedFailed` — real, confirmed
+ * outcomes only, never a raw fetched/claimed/attempted count.
+ */
+export interface SyncRunCounters {
+  candidatesFetched: number;
+  duplicateCandidatesSkipped: number;
+  uniqueCandidatesExamined: number;
+  recordsBuilt: number;
+  recordsUpserted: number;
+  rowsFinalizedSynced: number;
+  rowsFinalizedFailed: number;
+  /** A finalize call that ran but was NOT confirmed to affect a row — a genuine anomaly, always worth surfacing even though the row stays safely `pending`/reclaimable. */
+  finalizeUnconfirmed: number;
+}
+
+export interface SyncRunResult<TStopReason> {
+  stop: TStopReason | null;
+  counters: SyncRunCounters;
 }
 
 /**
@@ -99,8 +141,29 @@ export async function runSyncOrchestration<
 >(
   tracker: SyncTracker<TStopReason>,
   deps: SyncOrchestratorDeps<TRow, TClaim, TRaw, TRecord, TStopReason>,
-): Promise<TStopReason | null> {
+): Promise<SyncRunResult<TStopReason>> {
   let stop: TStopReason | null = null;
+  const counters: SyncRunCounters = {
+    candidatesFetched: 0,
+    duplicateCandidatesSkipped: 0,
+    uniqueCandidatesExamined: 0,
+    recordsBuilt: 0,
+    recordsUpserted: 0,
+    rowsFinalizedSynced: 0,
+    rowsFinalizedFailed: 0,
+    finalizeUnconfirmed: 0,
+  };
+  // Per-invocation-only duplicate guard. A row can legitimately resurface
+  // in a later fetch window within the SAME invocation — e.g. if an
+  // earlier finalize call for it wasn't confirmed (see finalizeSynced's
+  // doc comment) and it's still genuinely `pending` — but re-claiming and
+  // re-counting it a second time would silently inflate itemsProcessed
+  // relative to real, distinct outcomes. This set makes that structurally
+  // impossible regardless of the underlying cause: once an igdb_id has
+  // been examined this invocation, it is never claimed or counted again
+  // here. It stays exactly as its last claim left it (still `pending`,
+  // reclaimable) for a *future* invocation to pick up.
+  const seenIgdbIds = new Set<number>();
 
   outer: for (;;) {
     stop = tracker.shouldStop();
@@ -115,13 +178,36 @@ export async function runSyncOrchestration<
       stop = deps.exhaustedStop;
       break;
     }
+    counters.candidatesFetched += candidates.length;
+
+    const newRows: TRow[] = [];
+    for (const row of candidates) {
+      const id = deps.getRowIgdbId(row);
+      if (seenIgdbIds.has(id)) {
+        counters.duplicateCandidatesSkipped += 1;
+        continue;
+      }
+      seenIgdbIds.add(id);
+      newRows.push(row);
+    }
+    counters.uniqueCandidatesExamined += newRows.length;
+    if (newRows.length === 0) {
+      // Every candidate this window returned has already been examined
+      // this invocation — there is nothing new to make progress on.
+      // Never loop on this (a naive `continue` here risks spinning
+      // indefinitely, especially in dry-run where nothing ever changes
+      // state) — end the run cleanly instead, exactly as if the query
+      // itself had returned zero rows.
+      stop = deps.exhaustedStop;
+      break;
+    }
 
     // Claiming (a real Supabase write) is gated behind `execute` so a
     // dry-run never mutates the ledger. In dry-run, `previewClaim` reuses
     // the row's already-fetched state (no attempt_count bump) so batch
     // composition and token estimates still reflect reality.
     const claimed: TClaim[] = [];
-    for (const row of candidates) {
+    for (const row of newRows) {
       if (deps.execute) {
         const claim = await deps.claimRow(row);
         if (claim) claimed.push(claim);
@@ -140,9 +226,19 @@ export async function runSyncOrchestration<
     } catch (err) {
       if (deps.execute) {
         const message = deps.sanitizeError(err);
-        for (const claim of claimed) await deps.finalizeFailed(claim, message);
+        let confirmedFailed = 0;
+        for (const claim of claimed) {
+          if (await deps.finalizeFailed(claim, message)) {
+            counters.rowsFinalizedFailed += 1;
+            confirmedFailed += 1;
+          } else {
+            counters.finalizeUnconfirmed += 1;
+          }
+        }
+        tracker.itemsProcessed += confirmedFailed;
+      } else {
+        tracker.itemsProcessed += claimed.length;
       }
-      tracker.itemsProcessed += claimed.length;
       continue;
     }
 
@@ -157,13 +253,27 @@ export async function runSyncOrchestration<
       const { record, charCount } = deps.buildRecord(claim, raw);
       built.push({ claim, record, charCount });
     }
+    counters.recordsBuilt += built.length;
 
     if (deps.execute) {
+      let confirmedFailed = 0;
       for (const claim of buildFailures) {
-        await deps.finalizeFailed(claim, "no IGDB detail returned for this id");
+        if (
+          await deps.finalizeFailed(
+            claim,
+            "no IGDB detail returned for this id",
+          )
+        ) {
+          counters.rowsFinalizedFailed += 1;
+          confirmedFailed += 1;
+        } else {
+          counters.finalizeUnconfirmed += 1;
+        }
       }
+      tracker.itemsProcessed += confirmedFailed;
+    } else {
+      tracker.itemsProcessed += buildFailures.length;
     }
-    tracker.itemsProcessed += buildFailures.length;
     deps.onLog?.(
       `Window: ${claimed.length} claimed, ${built.length} built, ${buildFailures.length} build failures ` +
         `(1 IGDB request for this window, regardless of how many Pinecone sub-batches follow)`,
@@ -196,16 +306,32 @@ export async function runSyncOrchestration<
         );
       }
 
+      let confirmedThisBatch = 0;
       if (selected.length > 0 && deps.execute) {
         try {
           await deps.upsertBatch(
             selected.map((s) => s.record),
             marginedTokens,
           );
-          for (const s of selected) await deps.finalizeSynced(s.claim);
+          counters.recordsUpserted += selected.length;
+          for (const s of selected) {
+            if (await deps.finalizeSynced(s.claim)) {
+              counters.rowsFinalizedSynced += 1;
+              confirmedThisBatch += 1;
+            } else {
+              counters.finalizeUnconfirmed += 1;
+            }
+          }
         } catch (err) {
           const message = deps.sanitizeError(err);
-          for (const s of selected) await deps.finalizeFailed(s.claim, message);
+          for (const s of selected) {
+            if (await deps.finalizeFailed(s.claim, message)) {
+              counters.rowsFinalizedFailed += 1;
+              confirmedThisBatch += 1;
+            } else {
+              counters.finalizeUnconfirmed += 1;
+            }
+          }
         }
       } else if (selected.length > 0) {
         deps.onLog?.(
@@ -214,7 +340,15 @@ export async function runSyncOrchestration<
       }
 
       tracker.estimatedTokens += marginedTokens;
-      tracker.itemsProcessed += selected.length;
+      // itemsProcessed (drives --limit) reflects CONFIRMED real outcomes
+      // only — never a raw fetched/claimed/attempted count. In dry-run,
+      // where nothing is ever confirmed (finalize is never called), the
+      // selected count is the best available preview estimate instead;
+      // dry-run can't suffer the double-count failure mode this guards
+      // against, since previewClaim never mutates state.
+      tracker.itemsProcessed += deps.execute
+        ? confirmedThisBatch
+        : selected.length;
       deps.onLog?.(
         `Batch: ${selected.length} synced this batch, ${trimmed.length} deferred by token ceiling`,
       );
@@ -226,5 +360,5 @@ export async function runSyncOrchestration<
     }
   }
 
-  return stop;
+  return { stop, counters };
 }
