@@ -10,20 +10,20 @@ function result(overrides: Partial<GameSearchResult>): GameSearchResult {
     name: "Name",
     coverImageId: null,
     releaseYear: null,
-    gameType: "main_game",
+    gameType: "Main Game",
     versionParentIgdbId: null,
     ...overrides,
   };
 }
 
 describe("excludeUnwantedGameTypes", () => {
-  it("drops bundle/mod/pack entries, keeping everything else", () => {
+  it("drops bundle/mod/pack entries, keeping everything else — using IGDB's real returned label text (Title Case, 'Pack/Addon' not 'Pack')", () => {
     const results = [
-      result({ igdbId: 1, gameType: "main_game" }),
-      result({ igdbId: 2, gameType: "bundle" }),
-      result({ igdbId: 3, gameType: "mod" }),
-      result({ igdbId: 4, gameType: "pack" }),
-      result({ igdbId: 5, gameType: "dlc_addon" }),
+      result({ igdbId: 1, gameType: "Main Game" }),
+      result({ igdbId: 2, gameType: "Bundle" }),
+      result({ igdbId: 3, gameType: "Mod" }),
+      result({ igdbId: 4, gameType: "Pack/Addon" }),
+      result({ igdbId: 5, gameType: "DLC" }),
     ];
 
     expect(excludeUnwantedGameTypes(results).map((r) => r.igdbId)).toEqual([
@@ -83,7 +83,7 @@ describe("rankSearchResults", () => {
     const modTrap = result({
       igdbId: 2,
       name: "The Legend of Zelda Randomizer",
-      gameType: "mod",
+      gameType: "Mod",
     });
     const unrelated = result({ igdbId: 3, name: "Completely Different Game" });
 
@@ -97,17 +97,43 @@ describe("rankSearchResults", () => {
     // The mod-tagged entry still starts with the query (tier 1) so it
     // outranks a totally unrelated title, but its type penalty (unknown/
     // excluded types fall through to the worst bucket) keeps it below any
-    // real main_game/DLC/etc result at the same match tier.
+    // real Main Game/DLC/etc result at the same match tier.
     const dlcLikeCompetitor = result({
       igdbId: 4,
       name: "The Legend of Zelda: Expansion Pass",
-      gameType: "dlc_addon",
+      gameType: "DLC",
     });
     const rankedWithCompetitor = rankSearchResults("The Legend of Zelda", [
       modTrap,
       dlcLikeCompetitor,
     ]);
     expect(rankedWithCompetitor[0]).toBe(dlcLikeCompetitor);
+  });
+
+  it("prioritizes a real Main Game over a Port/DLC-typed entry at the same match tier — regression for the type-penalty key mismatch that made every real IGDB type fall through to 'unknown' (the 'lego star war' ranking gap)", () => {
+    const mainGame = result({
+      igdbId: 1,
+      name: "LEGO Star Wars III: The Clone Wars",
+      gameType: "Main Game",
+    });
+    const port = result({
+      igdbId: 2,
+      name: "LEGO Star Wars III: The Clone Wars",
+      gameType: "Port",
+    });
+    const unknownType = result({
+      igdbId: 3,
+      name: "LEGO Star Wars III: The Clone Wars",
+      gameType: "SomeFutureIgdbType",
+    });
+
+    const ranked = rankSearchResults("lego star war", [
+      unknownType,
+      port,
+      mainGame,
+    ]);
+
+    expect(ranked.map((r) => r.igdbId)).toEqual([1, 2, 3]);
   });
 
   it("ranks a merged local+IGDB set purely by match/version/type — source has no influence", () => {

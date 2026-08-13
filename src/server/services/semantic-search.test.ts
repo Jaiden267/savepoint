@@ -241,6 +241,39 @@ describe("searchGamesSemantic", () => {
       ]);
     });
 
+    it("renders a catalogue-only hit whose slug carries IGDB's own duplicate-name collision suffix (e.g. syndicate--2) — regression for the slug-regex bug that silently dropped 1,186 synced catalogue records from every semantic search result", async () => {
+      mockSearchGameIds.mockResolvedValue([
+        {
+          igdbId: 49,
+          score: 0.8,
+          fields: catalogueFields({
+            igdb_id: 49,
+            slug: "syndicate--2",
+            name: "Syndicate",
+          }),
+        },
+      ]);
+      const { supabase } = makeSupabaseStub({ data: [] });
+
+      const outcome = await searchGamesSemantic(supabase, {
+        query: "syndicate",
+        clientId: "client-collision-slug",
+      });
+
+      expect(outcome.results).toEqual([
+        {
+          source: "igdb",
+          igdbId: 49,
+          slug: "syndicate--2",
+          name: "Syndicate",
+          coverImageId: "cover-abc",
+          releaseYear: 2019,
+          gameType: null,
+          versionParentIgdbId: null,
+        },
+      ]);
+    });
+
     it("fails closed on a legacy v1 hit with no matching Supabase row (no schema_version, incomplete metadata) — drops it rather than rendering garbage", async () => {
       mockSearchGameIds.mockResolvedValue([
         {

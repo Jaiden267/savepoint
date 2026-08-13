@@ -1,9 +1,48 @@
 import { describe, it, expect } from "vitest";
 import {
+  gameSlugSchema,
   pineconeCatalogueRecordSchema,
   catalogueImportIgdbIdSchema,
 } from "./games";
 import { PINECONE_SCHEMA_VERSION } from "@/lib/pinecone/constants";
+
+describe("gameSlugSchema", () => {
+  it("accepts a plain single-hyphen slug", () => {
+    expect(gameSlugSchema.safeParse("thor-god-of-thunder").success).toBe(true);
+  });
+
+  it("accepts IGDB's own duplicate-name collision-suffix slug shape (a real, live example — the Thor: God of Thunder bug's root cause)", () => {
+    const result = gameSlugSchema.safeParse("thor-god-of-thunder--1");
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a run of more than two consecutive hyphens", () => {
+    expect(gameSlugSchema.safeParse("final-fantasy-iii---7").success).toBe(
+      true,
+    );
+  });
+
+  it("still rejects a leading or trailing hyphen", () => {
+    expect(gameSlugSchema.safeParse("-thor-god-of-thunder").success).toBe(
+      false,
+    );
+    expect(gameSlugSchema.safeParse("thor-god-of-thunder-").success).toBe(
+      false,
+    );
+  });
+
+  it("still rejects uppercase, spaces, and other non-slug characters", () => {
+    expect(gameSlugSchema.safeParse("Thor God Of Thunder").success).toBe(false);
+    expect(gameSlugSchema.safeParse("thor_god_of_thunder").success).toBe(false);
+    expect(gameSlugSchema.safeParse("thor god of thunder!").success).toBe(
+      false,
+    );
+  });
+
+  it("still rejects an empty string", () => {
+    expect(gameSlugSchema.safeParse("").success).toBe(false);
+  });
+});
 
 const VALID_V2_RECORD = {
   schema_version: PINECONE_SCHEMA_VERSION,
@@ -62,6 +101,14 @@ describe("pineconeCatalogueRecordSchema", () => {
       slug: "Not A Valid Slug!",
     });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts a real IGDB duplicate-name collision slug — regression for 1,186 synced catalogue records that were silently dropped from semantic search before this fix", () => {
+    const result = pineconeCatalogueRecordSchema.safeParse({
+      ...VALID_V2_RECORD,
+      slug: "syndicate--2",
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects a non-positive igdb_id", () => {

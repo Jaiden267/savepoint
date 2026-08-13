@@ -2,25 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { SearchIcon } from "lucide-react";
-import { searchGames } from "@/server/services/game-catalogue";
-import { searchGamesSemantic } from "@/server/services/semantic-search";
-import { createClient } from "@/lib/supabase/server";
-import { getClientIdentifier } from "@/lib/auth/request-ip";
-import {
-  GRID_CLASSES,
-  PosterGrid,
-  PosterGridSkeleton,
-} from "@/components/games/poster-grid";
-import { PosterCard } from "@/components/games/poster-card";
-import { CatalogueResultCard } from "@/components/games/catalogue-result-card";
+import { PosterGridSkeleton } from "@/components/games/poster-grid";
 import { IgdbAttribution } from "@/components/games/igdb-attribution";
 import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
 import { cn } from "@/lib/utils";
+import { SearchResults } from "./search-results";
+import type { SearchMode } from "./search-mode";
 
 export const metadata: Metadata = { title: "Search" };
-
-type SearchMode = "lexical" | "semantic";
 
 interface Props {
   searchParams: Promise<{ q?: string; mode?: string }>;
@@ -86,90 +76,5 @@ export default async function SearchPage({ searchParams }: Props) {
 
       <IgdbAttribution className="mt-10" />
     </main>
-  );
-}
-
-async function SearchResults({
-  query,
-  mode,
-}: {
-  query: string;
-  mode: SearchMode;
-}) {
-  let results;
-  let showFallbackNotice = false;
-
-  if (mode === "semantic") {
-    const supabase = await createClient();
-    const clientId = await getClientIdentifier();
-    const outcome = await searchGamesSemantic(supabase, { query, clientId });
-    results = outcome.results;
-    showFallbackNotice = outcome.mode === "lexical_fallback";
-  } else {
-    results = await searchGames(query);
-  }
-
-  if (results.length === 0) {
-    return (
-      <EmptyState
-        icon={SearchIcon}
-        title="No games found"
-        description={`Nothing matched "${query}".`}
-      />
-    );
-  }
-
-  return (
-    <>
-      {showFallbackNotice ? (
-        <p className="text-muted-foreground mb-4 text-sm" role="status">
-          Showing standard results — semantic search is temporarily unavailable.
-        </p>
-      ) : null}
-      {mode === "semantic" ? (
-        // Mixed grid, one item per Pinecone hit in its own rank order —
-        // a cached result (source: "local") renders as the normal
-        // PosterCard/Link; a catalogue-only result (source: "igdb", only
-        // ever produced by the semantic path — see
-        // semantic-search.ts's toCatalogueResult) renders as the
-        // POST-based CatalogueResultCard instead of a GET-triggering
-        // Link, since this is exactly the surface docs/PINECONE.md's
-        // "on-demand import boundary" section is about. Never two
-        // separately-ordered grids — Pinecone's combined rank order is
-        // preserved across both card types.
-        <div className={GRID_CLASSES}>
-          {results.map((result) =>
-            result.source === "local" ? (
-              <PosterCard
-                key={`local-${result.slug}`}
-                slug={result.slug}
-                name={result.name}
-                coverImageId={result.coverImageId}
-                releaseYear={result.releaseYear}
-                source="local"
-              />
-            ) : (
-              <CatalogueResultCard
-                key={`igdb-${result.igdbId}`}
-                igdbId={result.igdbId}
-                name={result.name}
-                coverImageId={result.coverImageId}
-                releaseYear={result.releaseYear}
-              />
-            ),
-          )}
-        </div>
-      ) : (
-        <PosterGrid
-          games={results.map((result) => ({
-            slug: result.slug,
-            name: result.name,
-            coverImageId: result.coverImageId,
-            releaseYear: result.releaseYear,
-            source: result.source,
-          }))}
-        />
-      )}
-    </>
   );
 }

@@ -8,6 +8,16 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
+const { mockImportCatalogueGameAction } = vi.hoisted(() => ({
+  mockImportCatalogueGameAction: vi.fn(
+    async (state: unknown, _formData: FormData) => state,
+  ),
+}));
+
+vi.mock("@/server/actions/games", () => ({
+  importCatalogueGameAction: mockImportCatalogueGameAction,
+}));
+
 const mockFetch = vi.fn();
 
 function jsonResponse(body: unknown): Response {
@@ -18,6 +28,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
   mockFetch.mockReset();
   mockPush.mockReset();
+  mockImportCatalogueGameAction.mockClear();
   mockFetch.mockResolvedValue(
     jsonResponse({
       results: [
@@ -148,6 +159,22 @@ describe("SearchCommandDialog — Open full search handoff", () => {
     expect(link).toHaveAttribute("href", "/search?q=zelda");
   });
 
+  it("preserves a multi-word query exactly, spaces and all — the 'lego star war' case, so full Standard search receives the identical text the quick-search results were based on", async () => {
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    await user.type(screen.getByRole("combobox"), "lego star war");
+
+    const link = screen.getByRole("link", { name: /open full search/i });
+    expect(link).toHaveAttribute("href", "/search?q=lego%20star%20war");
+    // Decoding the preserved query must round-trip to the exact original
+    // text, with no mode param forcing anything other than Standard.
+    const url = new URL(link.getAttribute("href") ?? "", "http://localhost");
+    expect(url.searchParams.get("q")).toBe("lego star war");
+    expect(url.searchParams.get("mode")).toBeNull();
+  });
+
   it("URL-encodes a query containing special characters", async () => {
     const user = userEvent.setup();
     render(<SearchCommandDialog />);
@@ -222,5 +249,139 @@ describe("SearchCommandDialog — Open full search handoff", () => {
     await user.keyboard("{Enter}");
 
     expect(mockPush).toHaveBeenCalledWith("/games/game-one");
+  });
+});
+
+/**
+ * Regression coverage for the real defect this dialog shipped with: an
+ * uncached ("igdb"-source) result was navigated to via a client-guessed
+ * `/games/<slug>` URL built from the live IGDB search response — which
+ * 404s whenever that game has never been imported into Supabase (e.g. the
+ * exact "Thor: God of Thunder" case, where a second, distinct IGDB game
+ * with the same title carried IGDB's own duplicate-name collision slug
+ * suffix, `thor-god-of-thunder--1`). Cached ("local") results carry a
+ * real, already-stored slug and must keep navigating directly; uncached
+ * results must go through the same POST-based import boundary the
+ * Pinecone catalogue-only results use, never a presumed URL.
+ */
+describe("SearchCommandDialog — cached vs. catalogue-only result activation", () => {
+  it("navigates a cached (local) result directly by its stored slug", async () => {
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    await user.type(screen.getByRole("combobox"), "game");
+    await user.click(await screen.findByRole("option", { name: /Game One/i }));
+
+    expect(mockPush).toHaveBeenCalledWith("/games/game-one");
+    expect(mockImportCatalogueGameAction).not.toHaveBeenCalled();
+  });
+
+  it("routes an uncached (igdb) result through the POST import action instead of a presumed URL — click", async () => {
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    await user.type(screen.getByRole("combobox"), "game");
+    await user.click(await screen.findByRole("option", { name: /Game Two/i }));
+
+    expect(mockImportCatalogueGameAction).toHaveBeenCalled();
+    const formData = mockImportCatalogueGameAction.mock
+      .calls[0]?.[1] as FormData;
+    expect(formData.get("igdbId")).toBe("2");
+    // Never a client-guessed `/games/<slug>` push for an uncached result.
+    expect(mockPush).not.toHaveBeenCalledWith("/games/game-two");
+  });
+
+  it("routes an uncached (igdb) result through the POST import action instead of a presumed URL — keyboard", async () => {
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    const input = screen.getByRole("combobox");
+    await user.type(input, "game");
+    await screen.findByRole("option", { name: /Game Two/i });
+
+    // ArrowDown twice: index -1 -> 0 (Game One) -> 1 (Game Two).
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    await user.keyboard("{Enter}");
+
+    expect(mockImportCatalogueGameAction).toHaveBeenCalled();
+    const formData = mockImportCatalogueGameAction.mock
+      .calls[0]?.[1] as FormData;
+    expect(formData.get("igdbId")).toBe("2");
+    expect(mockPush).not.toHaveBeenCalledWith("/games/game-two");
+  });
+
+  it("closes the dialog immediately when an uncached result is activated", async () => {
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    await user.type(screen.getByRole("combobox"), "game");
+    await user.click(await screen.findByRole("option", { name: /Game Two/i }));
+
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("never constructs a game URL from the displayed title/slug for an uncached result, even one shaped like the live Thor: God of Thunder bug", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        results: [
+          {
+            source: "local",
+            igdbId: 5219,
+            slug: "thor-god-of-thunder",
+            name: "Thor: God of Thunder",
+            coverImageId: null,
+            releaseYear: 2011,
+          },
+          {
+            source: "igdb",
+            igdbId: 314293,
+            slug: "thor-god-of-thunder--1",
+            name: "Thor: God of Thunder",
+            coverImageId: null,
+            releaseYear: 2011,
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    render(<SearchCommandDialog />);
+    await openDialog(user);
+
+    await user.type(screen.getByRole("combobox"), "thor");
+    const firstPassOptions = await screen.findAllByRole("option", {
+      name: /Thor: God of Thunder/i,
+    });
+    expect(firstPassOptions).toHaveLength(2);
+
+    // The first (cached) occurrence navigates directly by its real slug.
+    // Activating any result closes the dialog, same as real usage.
+    await user.click(firstPassOptions[0]);
+    expect(mockPush).toHaveBeenCalledWith("/games/thor-god-of-thunder");
+    expect(mockImportCatalogueGameAction).not.toHaveBeenCalled();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+
+    mockPush.mockClear();
+
+    // Reopen and activate the second (uncached) occurrence — carrying
+    // IGDB's own double-hyphen duplicate-name slug. It must never be
+    // pushed to directly; it goes through the import action, keyed by
+    // igdb_id, never the slug/title.
+    await openDialog(user);
+    await user.type(screen.getByRole("combobox"), "thor");
+    const secondPassOptions = await screen.findAllByRole("option", {
+      name: /Thor: God of Thunder/i,
+    });
+    expect(secondPassOptions).toHaveLength(2);
+
+    await user.click(secondPassOptions[1]);
+    expect(mockImportCatalogueGameAction).toHaveBeenCalled();
+    const formData = mockImportCatalogueGameAction.mock
+      .calls[0]?.[1] as FormData;
+    expect(formData.get("igdbId")).toBe("314293");
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });

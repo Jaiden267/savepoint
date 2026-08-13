@@ -27,7 +27,7 @@ function localRow(overrides: Partial<Record<string, unknown>> = {}) {
     name: "Local Game",
     cover_image_id: null,
     release_date: null,
-    igdb_game_type: "main_game",
+    igdb_game_type: "Main Game",
     version_parent_igdb_id: null,
     ...overrides,
   };
@@ -43,7 +43,7 @@ function igdbResult(
     name: "IGDB Game",
     coverImageId: null,
     releaseYear: null,
-    gameType: "main_game",
+    gameType: "Main Game",
     versionParentIgdbId: null,
     ...overrides,
   };
@@ -79,7 +79,7 @@ describe("searchLocalGames", () => {
         name: "Local Game",
         coverImageId: null,
         releaseYear: null,
-        gameType: "main_game",
+        gameType: "Main Game",
         versionParentIgdbId: null,
       },
     ]);
@@ -111,6 +111,41 @@ describe("searchGames", () => {
     expect(results.map((r) => r.igdbId).sort()).toEqual([1, 2]);
   });
 
+  it("performs exactly one final rank+truncate over the full merged set — regression for the 'lego star war' bug where a relevant IGDB-only candidate was pre-truncated away before ever being merged with local results", async () => {
+    // searchIgdbGames's contract is now to return its FULL overfetched pool
+    // (can be larger than `limit`), not a pre-truncated `limit`-sized
+    // slice — see src/lib/igdb/search.ts. A canonical Main Game candidate
+    // that happens to arrive late in that larger pool (e.g. position 25 of
+    // 25 — plausible given IGDB's own non-guaranteed-stable relevance
+    // ordering for a broad query, plus dozens of real platform-Port
+    // duplicates of the same title) must still survive the merge: only
+    // ONE truncation should happen, after local + igdb are combined and
+    // the (now-fixed) Main Game > Port type penalty has had a chance to
+    // move it to the front of its match tier.
+    mockSelectResult([]);
+    const canonicalMainGame = igdbResult({
+      igdbId: 999,
+      name: "LEGO Star Wars III: The Clone Wars",
+      gameType: "Main Game",
+    });
+    const portDuplicates = Array.from({ length: 24 }, (_, i) =>
+      igdbResult({
+        igdbId: i + 1,
+        name: "LEGO Star Wars III: The Clone Wars",
+        gameType: "Port",
+      }),
+    );
+    mockSearchIgdbGames.mockResolvedValue([
+      ...portDuplicates,
+      canonicalMainGame,
+    ]);
+
+    const results = await searchGames("lego star war", { limit: 20 });
+
+    expect(results.map((r) => r.igdbId)).toContain(999);
+    expect(results[0].igdbId).toBe(999);
+  });
+
   it("dedupes by igdbId, keeping the local representation for linking", async () => {
     mockSelectResult([
       localRow({ igdb_id: 1, slug: "local-slug", name: "Local Name" }),
@@ -134,6 +169,37 @@ describe("searchGames", () => {
     const results = await searchGames("Exact Query Match");
 
     expect(results[0].igdbId).toBe(2);
+  });
+
+  it("keeps two separate IGDB games that share the same title as distinct results — identity is igdb_id, not title/slug", async () => {
+    // The exact "Thor: God of Thunder" shape: one cached game and a
+    // second, genuinely different IGDB game with the same displayed
+    // title, disambiguated only by IGDB's own duplicate-name slug suffix.
+    mockSelectResult([
+      localRow({
+        igdb_id: 5219,
+        slug: "thor-god-of-thunder",
+        name: "Thor: God of Thunder",
+      }),
+    ]);
+    mockSearchIgdbGames.mockResolvedValue([
+      igdbResult({
+        igdbId: 314293,
+        slug: "thor-god-of-thunder--1",
+        name: "Thor: God of Thunder",
+      }),
+    ]);
+
+    const results = await searchGames("thor god of thunder");
+
+    expect(results.map((r) => r.igdbId).sort((a, b) => a - b)).toEqual([
+      5219, 314293,
+    ]);
+    const uncached = results.find((r) => r.igdbId === 314293);
+    expect(uncached).toMatchObject({
+      source: "igdb",
+      slug: "thor-god-of-thunder--1",
+    });
   });
 
   it("degrades to local-only results if the IGDB fallback throws", async () => {

@@ -23,6 +23,18 @@ const searchInputSchema = z.object({
  * (apicalypse.ts — no arbitrary query is ever accepted), drops obviously
  * unwanted types (bundle/mod/pack) using the real returned data, and ranks
  * the remainder so exact/prefix matches outrank IGDB's own fuzzy ordering.
+ *
+ * Returns the full overfetched, ranked, filtered pool (up to
+ * `buildSearchQuery`'s own overfetch cap) — deliberately NOT truncated to
+ * `limit` here. `game-catalogue.ts`'s `searchGames` merges this with local
+ * results and performs exactly one final rank+truncate; truncating here
+ * too meant a genuinely relevant but not-yet-cached candidate's survival
+ * depended entirely on which arbitrary subset IGDB's own live, not
+ * perfectly stable relevance ordering happened to deliver in one specific
+ * call, with no chance to be reconsidered once merged with local matches
+ * (the confirmed cause of a real "lego star war" inconsistency between the
+ * quick-search dialog and full Standard search — see docs/PINECONE.md's...
+ * actually see docs/PROJECT_STATE.md's changelog entry for the incident).
  */
 export async function searchIgdbGames(
   query: string,
@@ -41,10 +53,7 @@ export async function searchIgdbGames(
 
   const mapped = raw.map(mapIgdbSearchResult);
   const filtered = excludeUnwantedGameTypes(mapped);
-  const ranked = rankSearchResults(parsed.query, filtered).slice(
-    0,
-    parsed.limit,
-  );
+  const ranked = rankSearchResults(parsed.query, filtered);
 
   setCachedSearch(cacheKey, ranked);
   return ranked;

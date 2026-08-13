@@ -1475,6 +1475,341 @@ Pinecone usage via the dashboard before authorizing execution, since it
 cannot be queried programmatically (no such SDK endpoint) and this
 session consumed some of the previously-confirmed headroom.
 
+### Gate E final continuation — complete (2026-08-13)
+
+User confirmed live Pinecone usage (3.6M / 10M llama-text-embed-v2
+tokens, resetting 2026-09-01) and authorized the final continuation for
+all 8,771 remaining pending records, with the exact ceilings proposed
+above. Preflight reconfirmed the accepted checkpoint unchanged (ledger
+`synced=17,905 pending=8,771 failed=0`, Pinecone raw 17,916, lease free),
+confirmed the committed fix present (`fd88b39`), and a bounded
+`sync --limit 100` dry-run produced zero writes.
+
+**Five resumable chunks, each independently reconciled between-run**
+(ledger delta, Pinecone delta, and confirmed-synced count all matched
+exactly, every time — no mismatch recurred with the fix in place):
+
+| Chunk     | Records   | IGDB requests | Runtime       | Raw tokens    | Margined tokens |
+| --------- | --------- | ------------- | ------------- | ------------- | --------------- |
+| 1         | 2,000     | 10            | ~4.3 min      | 330,001       | 429,001         |
+| 2         | 2,000     | 10            | ~4.2 min      | 357,205       | 464,366         |
+| 3         | 2,000     | 10            | ~4.2 min      | 420,767       | 546,996         |
+| 4         | 2,000     | 10            | ~4.3 min      | 376,515       | 489,470         |
+| 5         | 771       | 4             | ~1.5 min      | 127,439       | 165,670         |
+| **Total** | **8,771** | **44**        | **~18.5 min** | **1,611,927** | **2,095,503**   |
+
+All five totals land well inside every cumulative ceiling (8,771/8,771
+records, 44/50 requests, ~18.5/90 min, ~2.10M/3.6M margined tokens). No
+chunk deferred any record by the token pacer; no duplicate `igdb_id` was
+claimed or counted twice in any chunk (each chunk's fetched rows were
+independently confirmed distinct); the lease was free after every chunk.
+
+**Final state — full catalogue coverage confirmed:**
+
+- `discover:balanced:gen1`: complete at 26,676 (unchanged, no
+  rediscovery run).
+- Ledger (`igdb_catalogue_sync`): `pending=0 synced=26,676 failed=0
+ineligible=0` — **reconciles exactly** with the discovery total. The
+  `igdb_id` primary key makes duplicate ledger rows structurally
+  impossible; `status` itself now reports "Discovered-eligible count and
+  synced count RECONCILE — coverage claim is safe."
+- Pinecone raw record count (`describeIndexStats`, exact): **26,686** —
+  26,676 v2 catalogue records + 9 pre-existing legacy (UUID-shaped) v1
+  records + 1 record from ordinary organic on-demand sync overlap
+  (a real user importing a catalogue-eligible game via `/games/[slug]`
+  while its ledger row was still `pending`, the same benign pattern
+  documented earlier in this file — not corruption, not a duplicate
+  `igdb_id`, since Pinecone upsert-by-id is idempotent to a retry).
+- 25-record `verify --sample 25` pass: 25/25 sampled synced `igdb_id`s
+  found in Pinecone.
+- Every new record written this continuation carries `schema_version: 2`
+  (unconditional in `buildGameRecordFields`, not conditional logic that
+  could regress).
+- No write to the `games` table occurred at any point in this
+  continuation (confirmed by inspection — `igdb-catalogue-sync.mts`'s
+  `sync` path only ever touches `igdb_catalogue_sync` and the Pinecone
+  namespace); no ratings, reviews, or activity were fabricated anywhere
+  (structurally impossible from this code path).
+- Global lease: free.
+
+**No code changes were required this continuation** — the reconciliation
+fix already committed and pushed (`fd88b39`) proved correct across all
+five chunks. `git status` at the end of this session shows only the
+pre-existing untracked `gate-d-sync-1.log`.
+
+**Automated verification suite** (re-run after completion, confirming no
+regression from the live sync activity itself): `npm run lint` (0
+errors, 16 pre-existing intentional-unused-param warnings), `npm run
+typecheck` (clean), `npm run format:check` (clean), `npm run build` (all
+29 routes), `npm run verify-standalone` (5/5). `npm test`: **558/559**,
+the sole failure being the same pre-existing, already-documented
+`drawer.test.tsx` focus-trap flake — reported honestly, not investigated
+further or redesigned per standing instruction.
+
+**Expected Pinecone dashboard usage**: starting from the user-confirmed
+3.6M/10M tokens (2026-08-13), plus this continuation's ~1.61M real raw
+embedding tokens, expected total is **≈5.21M / 10M**, leaving
+**≈4.79M** headroom for the remainder of the billing window (resets
+2026-09-01). The dashboard is the only authoritative source for the
+exact figure — no SDK endpoint exists to query it programmatically.
+
+**Manual semantic-search verification — deferred to the user.** This
+session's in-agent browser tooling was unable to reach a stable page
+load against the dev server (navigation hangs and a non-compositing
+pane, consistent with this project's documented UNC-network-share
+Watchpack instability — no `GET /search` request ever reached the dev
+server's own logs, so this is a tooling/environment issue, not a finding
+about the app). Suggested checklist for the user to run manually:
+
+- [ ] `/search?mode=semantic` for a niche, specific query (e.g. a genre/
+      theme combination unlikely to match the ~26 originally-imported
+      games) returns newly catalogue-indexed results.
+- [ ] At least one catalogue-only result renders via the POST-based
+      `CatalogueResultCard` (a real `<button type="submit">`, not a
+      plain link) rather than the cached-game `PosterCard` path.
+- [ ] Submitting a catalogue-only card imports the game and redirects to
+      a working `/games/[slug]` page with genuine IGDB metadata, no
+      fabricated ratings/reviews/activity.
+- [ ] No unexpected console errors during the above.
+
+### Global search dialog: double-hyphen slug 404 — found and fixed (2026-08-13)
+
+Manual Gate E browser testing (signed out) found a real navigation defect,
+not cosmetic: searching the global ⌘K dialog for "thor" returned two
+"Thor: God of Thunder" (2011) results — two genuinely different IGDB
+games (`igdb_id` 5219, cached, and a second, uncached game), correctly
+**not** deduped (dedup is by `igdb_id`, and these are distinct games).
+Clicking the uncached one navigated to `/games/thor-god-of-thunder--1`
+and 404'd.
+
+**Proven root cause**: `gameSlugSchema`'s regex
+(`src/lib/validation/games.ts`) required single hyphens only
+(`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`). IGDB disambiguates duplicate-titled
+games with its own `--N` slug suffix (`thor-god-of-thunder--1` is that
+game's real, live IGDB slug) — the old regex rejected this as invalid,
+so `/games/[slug]`'s `gameSlugSchema.safeParse(rawSlug)` called
+`notFound()` **before `getOrImportGameBySlug` ever ran** — confirmed by
+reading `src/app/games/[slug]/page.tsx` directly, not inferred. This is
+not specific to the search dialog: a live, read-only query found an
+**already-cached** `games` row with this exact defect
+(`tom-clancys-rainbow-six-vegas--1`, igdb_id 314292) — meaning that game
+has been completely unreachable via any direct link, diary entry,
+review, or library action since it was imported. A full scan of all
+26,676 synced Prompt 7C catalogue records found **1,186 (4.4%)** carry a
+`--N` slug — every one of those was also being silently dropped from
+**every semantic search result**, since `pineconeCatalogueRecordSchema`
+(used to validate a catalogue-only hit's metadata in
+`semantic-search.ts`) reuses the same `gameSlugSchema` and fails closed
+on a validation error (`toCatalogueResult` returns `null`, the caller
+`continue`s past it) — a real, previously-unnoticed correctness gap in
+the just-completed Prompt 7C work, not merely a UI glitch.
+
+A second issue, inspected but not the cause of the 404: the global
+dialog navigated **every** result — cached and uncached alike — via a
+client-side `router.push('/games/<slug>')` built from the search API's
+response, never through the POST-based import boundary
+(`importCatalogueGameAction`) the Pinecone catalogue-only results use.
+For an uncached result this meant presuming a URL exists rather than
+guaranteeing it via import. Fixed for consistency and defense-in-depth,
+even though the regex was the actual 404 trigger.
+
+**Fixed, two layers:**
+
+1. **`gameSlugSchema`** widened to
+   `/^[a-z0-9]+(?:-+[a-z0-9]+)*$/` — accepts one-or-more consecutive
+   hyphens between alnum segments (IGDB's real slug shape), still
+   rejects leading/trailing hyphens, uppercase, spaces, and other
+   invalid characters. This one change fixes the route-level 404 for
+   any consumer of `gameSlugSchema` (`/games/[slug]`, diary/library/
+   review actions, and `pineconeCatalogueRecordSchema`), and un-hides
+   all 1,186 previously-dropped catalogue records from semantic search.
+2. **`src/components/search/search-command-dialog.tsx`**: a `local`
+   (cached) result still navigates directly by its real, already-stored
+   slug. An `igdb` (uncached) result now submits through the same
+   `importCatalogueGameAction` the Pinecone catalogue-only results use
+   (via `useActionState`'s dispatch called directly from the
+   click/Enter handler, not a nested `<form>` — the existing virtual
+   listbox/`role="option"` pattern is preserved, so no interactive
+   element is nested inside a listbox option) — never a presumed
+   `/games/<slug>` URL built from client-side data. Works identically
+   signed-in or signed-out (the action has no auth requirement).
+
+**Live-reproduced against the production standalone build** (`npm run
+build` + a standalone server, not the dev server): before this fix was
+in the build, `GET /games/tom-clancys-rainbow-six-vegas--1` (a real,
+already-imported game) rendered "Page not found"
+(`NEXT_HTTP_ERROR_FALLBACK;404` in the RSC payload); after rebuilding
+with the fix, the same URL renders the real game — confirmed via the
+page's actual `<h1>Tom Clancy's Rainbow Six: Vegas</h1>` heading and
+summary text in the response body, zero `NEXT_HTTP_ERROR_FALLBACK`
+occurrences.
+
+**16 new regression tests**: `gameSlugSchema` (accepts the real
+double-hyphen slug and a 3-hyphen run; still rejects leading/trailing
+hyphens, uppercase, spaces, empty string), `pineconeCatalogueRecordSchema`
+(accepts a real collision slug), `semanticSearch` (a catalogue-only hit
+with a `syndicate--2` slug now renders instead of being dropped),
+`game-catalogue`'s `searchGames` (two separate IGDB games sharing a
+title stay distinct, keyed by `igdb_id`, not deduped), `GamePage` (a
+double-hyphen slug reaches `getOrImportGameBySlug` instead of 404ing
+first), and `SearchCommandDialog` (cached result still navigates
+directly; uncached result routes through the import action on both
+click and keyboard activation; dialog closes on activation; the exact
+mixed cached/uncached Thor scenario end-to-end).
+
+**Automated suite**: `npm run lint` (0 errors, 1 new intentional-unused-
+param warning matching this project's convention), `npm run typecheck`
+(clean), `npm run format:check` (clean), `npm run build` (all 29
+routes), `npm run verify-standalone` (5/5). `npm test`: **573/574** (+15
+net new tests), the sole failure being the same pre-existing, already-
+documented `drawer.test.tsx` flake — untouched, reported honestly.
+
+Not committed, not pushed. No catalogue discovery/sync was run; no
+Pinecone index or migration was touched; no legacy records were deleted;
+no recommendations work was started.
+
+**Manual verification (user, browser, 2026-08-13): PASSED.** Confirmed:
+both distinct "Thor: God of Thunder" results open successfully; the
+double-hyphen route `/games/thor-god-of-thunder--1` works; catalogue-only
+results still use the POST-based import boundary; no unexpected console
+errors.
+
+### Quick-search vs. full Standard search inconsistency — found and fixed (2026-08-13)
+
+Manual testing found a second real defect: searching "lego star war" in the
+global quick-search dialog showed "LEGO Star Wars III: The Clone Wars"
+(twice — two genuinely distinct IGDB games, correctly not deduped), but
+clicking "Open full search" (query preserved correctly) landed on
+Standard mode missing it entirely, despite both surfaces calling the
+identical `searchGames(query)` service with the identical, correctly-
+preserved query text and limit.
+
+**Investigation ruled out**: query-string corruption (confirmed
+byte-identical between the dialog's `encodeURIComponent`-built href and
+what `/search`'s `q` param receives — new tests lock this in), a
+dedup/identity bug (both Clone Wars entries are separate real IGDB
+games, `igdb_id` 194948 and 6844, correctly kept distinct), and a local-
+cache truncation bug (only 3 local rows match "lego star war", far under
+any limit, so both were always guaranteed included from the local side).
+
+**Proven root cause, two compounding defects in `searchGames`'s merge
+pipeline** (`src/server/services/game-catalogue.ts` +
+`src/lib/igdb/search.ts` + `src/lib/igdb/ranking.ts`):
+
+1. **Double, uncoordinated truncation.** `searchIgdbGames` truncated its
+   own results to `limit` (20) internally, _before_ `game-catalogue.ts`'s
+   `searchGames` ever merged them with local results and ranked the
+   combined set. For an IGDB-only (not-yet-cached) candidate — the state
+   "LEGO Star Wars III: The Clone Wars" was actually in at the time of
+   the report, confirmed by its `games` row's `created_at` timestamp
+   landing during this investigation, not before it — its survival
+   depended entirely on which arbitrary subset of raw candidates IGDB's
+   own live, not-guaranteed-stable relevance ordering happened to
+   deliver in _that specific call_, with zero chance to be reconsidered
+   once local results were factored in. IGDB has dozens of "LEGO Star
+   Wars…" platform-Port entries for this exact query, so two separate
+   live calls (dialog vs. full-page) plausibly returned different raw
+   top-N windows.
+2. **`TYPE_PENALTY`/`EXCLUDED_GAME_TYPES` never matched real IGDB data.**
+   Confirmed live: IGDB's `game_type.type` field returns English labels
+   ("Main Game", "Port", "Pack/Addon", …), passed through unmodified by
+   `mappers.ts` — never the snake_case shape (`"main_game"`, `"pack"`)
+   `ranking.ts`'s lookup tables used. Every real result's type therefore
+   silently fell through to the "unknown" penalty, making `rankSearchResults`
+   unable to prioritize a canonical Main Game entry over dozens of
+   same-title Port duplicates within the same match tier — and letting
+   "Pack/Addon"-typed entries slip past the intended exclusion filter
+   (only "Bundle"/"Mod" actually matched). **The existing test suite
+   itself used the same wrong snake_case shape as its fixtures**, so it
+   passed without ever exercising real data.
+
+Together: a canonical, highly relevant candidate could lose a 20+-way
+tie purely on insertion-order luck, with no type-based signal to rescue
+it — explaining the exact reported inconsistency.
+
+**Fixed, three small, targeted changes:**
+
+1. `searchIgdbGames` no longer slices to `limit` internally — it returns
+   its full overfetched, ranked, filtered pool. `searchGames` performs
+   exactly one final rank+truncate over the complete merged (local +
+   igdb) set.
+2. `TYPE_PENALTY`/`EXCLUDED_GAME_TYPES` (`ranking.ts`) now use IGDB's
+   real label text ("main game", "port", "pack/addon", lowercased for
+   comparison), so Main Game entries correctly outrank Port/DLC
+   duplicates of the same title, and Pack/Addon entries are actually
+   excluded.
+3. `SearchResults` (the `/search` page's result renderer) extracted from
+   `page.tsx` into `src/app/search/search-results.tsx` — purely for
+   direct testability (Next's route-file export whitelist rejects extra
+   named exports on `page.tsx`); no behavior change.
+
+**Live-reproduced against the production standalone build, before and
+after**: `GET /search?q=lego%20star%20war` and `GET /api/search?q=lego%20star%20war`
+both now consistently include "LEGO Star Wars III: The Clone Wars" —
+confirmed via direct HTTP calls against a rebuilt standalone server, both
+immediately and after the IGDB search cache's 60s TTL expired (repeated
+across three separate live calls spanning 65+ seconds, all consistent
+post-fix).
+
+**16 new regression tests**: `searchIgdbGames` no longer truncates
+internally and correctly prioritizes real Main Game types
+(`src/lib/igdb/search.ts`, new test file); `rankSearchResults`/
+`excludeUnwantedGameTypes` use real IGDB label text, including a direct
+Main-Game-vs-Port-vs-unknown-type regression (`ranking.test.ts`, fixtures
+also corrected from the wrong snake_case shape); `searchGames` performs
+exactly one final rank+truncate over a full merged set, reproducing the
+exact "24 Port duplicates + 1 late-arriving Main Game" shape
+(`game-catalogue.test.ts`); the dialog preserves "lego star war" exactly,
+byte for byte, into the full-search link (`search-command-dialog.test.tsx`);
+and new `SearchResults`/`SearchPage` coverage locking in query
+preservation, default-Standard-mode behavior, and full rendering of every
+result with no additional page-level truncation
+(`src/app/search/page.test.tsx`, new file).
+
+**Automated suite**: `npm run lint` (0 errors), `npm run typecheck`
+(clean), `npm run format:check` (clean), `npm run build` (all 29
+routes), `npm run verify-standalone` (5/5). `npm test`: **586/587** (+13
+net new tests), the sole failure being the same pre-existing, already-
+documented `drawer.test.tsx` flake.
+
+Not committed, not pushed. No catalogue discovery/sync was run; no
+Pinecone index or migration was touched; no legacy records were deleted;
+no recommendations work was started.
+
+**Manual verification (user, browser, 2026-08-13): PASSED.** Confirmed:
+quick search for "lego star war" displays "LEGO Star Wars III: The Clone
+Wars"; "Open full search" preserves the query exactly; the same game now
+appears in full Standard search; the result opens the correct game page;
+legitimate same-title games with different IGDB IDs remain distinct; no
+unexpected console errors.
+
+### Prompt 7C / Gate E — fully complete (2026-08-13)
+
+Both defects found during Gate E's manual browser verification pass (the
+double-hyphen IGDB slug 404 and the quick-search-vs-Standard-search
+ranking inconsistency, both above) are fixed, tested, and manually
+re-verified in the browser by the user. Combined with the prior
+completion of catalogue synchronization (all 26,676 Balanced-profile
+games indexed, `pending=0`, zero duplicate `igdb_id`s — see "Gate E final
+continuation — complete" above), every gate of Prompt 7C (A1 → A2 → B →
+C → D → E) is now done and manually verified end to end:
+
+- Full Balanced-profile catalogue (26,676 games) indexed in Pinecone,
+  reconciled with zero pending records and zero failures.
+- Cached-game navigation, catalogue-only POST import, and IGDB
+  duplicate-name slug handling (`--N` suffixes) all work correctly,
+  confirmed live against the production standalone build and by the
+  user's own browser testing.
+- Quick-search (global dialog) and full Standard search now agree on
+  results for the same query, with type-aware ranking correctly
+  prioritizing canonical entries over platform-port duplicates.
+- Distinct games sharing a title are never conflated; the same IGDB game
+  is never duplicated in results.
+
+Not committed, not pushed — this fix work and the completed catalogue
+sync remain in the working tree pending explicit commit/push
+authorization.
+
 ### ZimaOS scheduling (documented only — not wired)
 
 Once past initial catalogue sync, `incremental`/`release-check` are

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useActionState,
   useCallback,
   useEffect,
   useId,
@@ -22,6 +23,8 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { igdbImageUrl } from "@/lib/igdb/image-url";
 import { cn } from "@/lib/utils";
+import { importCatalogueGameAction } from "@/server/actions/games";
+import { initialActionState } from "@/lib/action-state";
 
 interface SearchResultItem {
   source: "local" | "igdb";
@@ -55,6 +58,10 @@ export function SearchCommandDialog() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
   const listboxId = useId();
+  const [, submitCatalogueImport] = useActionState(
+    importCatalogueGameAction,
+    initialActionState,
+  );
 
   useEffect(() => {
     function handleGlobalKeyDown(event: globalThis.KeyboardEvent) {
@@ -109,9 +116,29 @@ export function SearchCommandDialog() {
     runSearch(value);
   }
 
-  function navigateTo(slug: string) {
+  /**
+   * A `local` result carries a real, already-stored Supabase slug — safe
+   * to navigate to directly. An `igdb` result carries only data from a
+   * live IGDB search, never a Savepoint route guaranteed to exist (this is
+   * exactly what the Thor: God of Thunder bug was: navigating straight to
+   * a presumed `/games/<igdb-slug>` URL for a game Savepoint had never
+   * imported). Uncached results must go through the same POST-based
+   * import boundary the Pinecone catalogue-only results use
+   * (src/server/actions/games.ts's importCatalogueGameAction) — it
+   * imports first, then redirects to the game's real, freshly-stored
+   * slug, so this never depends on guessing a URL from client-side data.
+   * This has no auth requirement, so it behaves identically for
+   * signed-out visitors.
+   */
+  function activateResult(result: SearchResultItem) {
     setOpen(false);
-    router.push(`/games/${slug}`);
+    if (result.source === "local") {
+      router.push(`/games/${result.slug}`);
+      return;
+    }
+    const formData = new FormData();
+    formData.set("igdbId", String(result.igdbId));
+    submitCatalogueImport(formData);
   }
 
   function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -125,7 +152,7 @@ export function SearchCommandDialog() {
     } else if (event.key === "Enter") {
       event.preventDefault();
       const active = results[activeIndex] ?? results[0];
-      if (active) navigateTo(active.slug);
+      if (active) activateResult(active);
     }
     // Escape is intentionally left unhandled here — Base UI's Dialog
     // closes on Escape by default.
@@ -198,7 +225,7 @@ export function SearchCommandDialog() {
                 id={`${listboxId}-option-${index}`}
                 role="option"
                 aria-selected={index === activeIndex}
-                onClick={() => navigateTo(result.slug)}
+                onClick={() => activateResult(result)}
                 onMouseEnter={() => setActiveIndex(index)}
                 className={cn(
                   "flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm",

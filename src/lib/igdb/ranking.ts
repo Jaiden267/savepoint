@@ -10,20 +10,28 @@ import type { GameSearchResult } from "./types";
 
 /**
  * Dropped entirely, before ranking, using the real returned `game_type.type`
- * string — never a deprecated numeric where-clause. DLC/expansion/remaster/
+ * string — never a deprecated numeric where-clause. IGDB returns this field
+ * as an English label ("Main Game", "Port", "Pack/Addon", ...), never
+ * snake_case — confirmed live against the `game_types` reference table
+ * (Prompt 7C) and passed through unmodified by mappers.ts. Comparisons
+ * below lowercase both sides, so these Sets/maps must use IGDB's real
+ * label text, not an assumed snake_case shape (a prior version of this
+ * file used snake_case keys that never matched any real response, silently
+ * making every type-based comparison fall through to the "unknown" case —
+ * see the "lego star war" ranking investigation). DLC/expansion/remaster/
  * port/episode/season stay in-band; only these three are excluded outright.
  */
-const EXCLUDED_GAME_TYPES = new Set(["bundle", "mod", "pack"]);
+const EXCLUDED_GAME_TYPES = new Set(["bundle", "mod", "pack/addon"]);
 
 /** Lower is better. Types not listed (including an unknown/future IGDB type) fall through to the same penalty as DLC-ish content. */
 const TYPE_PENALTY: Record<string, number> = {
-  main_game: 0,
+  "main game": 0,
   remake: 1,
   remaster: 1,
   port: 1,
-  expanded_game: 1,
-  standalone_expansion: 2,
-  dlc_addon: 3,
+  "expanded game": 1,
+  "standalone expansion": 2,
+  dlc: 3,
   expansion: 3,
   episode: 3,
   season: 3,

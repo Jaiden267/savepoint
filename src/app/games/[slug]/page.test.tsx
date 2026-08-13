@@ -185,6 +185,28 @@ describe("GamePage — review section across every ownReview/recentReviews state
     expect(screen.queryByText("Your review")).not.toBeInTheDocument();
   });
 
+  it("accepts a slug carrying IGDB's own duplicate-name collision suffix (e.g. thor-god-of-thunder--1) instead of 404ing before the import lookup even runs — regression for the live Thor: God of Thunder bug", async () => {
+    const collisionGame = {
+      ...game,
+      slug: "thor-god-of-thunder--1",
+      name: "Thor: God of Thunder",
+    };
+    mockGetOrImportGameBySlug.mockResolvedValue(collisionGame);
+    mockGetUser.mockResolvedValue({ data: { user: null } });
+    mockGetGameSocialData.mockResolvedValue(baseSocial());
+
+    const jsx = await GamePage({
+      params: Promise.resolve({ slug: collisionGame.slug }),
+    });
+    render(jsx);
+
+    expect(mockGetOrImportGameBySlug).toHaveBeenCalledWith(
+      "thor-god-of-thunder--1",
+      "test-client",
+    );
+    expect(screen.getByTestId("game-hero")).toBeInTheDocument();
+  });
+
   it("renders successfully for a signed-out viewer even when other users' reviews exist", async () => {
     mockGetUser.mockResolvedValue({ data: { user: null } });
     mockGetGameSocialData.mockResolvedValue(

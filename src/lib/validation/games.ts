@@ -2,17 +2,24 @@ import { z } from "zod";
 import { PINECONE_SCHEMA_VERSION } from "@/lib/pinecone/constants";
 
 /**
- * Matches IGDB's own slug shape (lowercase alnum segments joined by single
- * hyphens). Validated before any local/IGDB lookup so an obviously-invalid
- * `/games/[slug]` request 404s immediately with zero DB or IGDB calls —
- * part of the abuse boundary documented in game-sync.ts.
+ * Matches IGDB's own slug shape: lowercase alnum segments joined by one or
+ * more hyphens. IGDB disambiguates duplicate-titled games with a `--N`
+ * suffix on the slug (e.g. `thor-god-of-thunder--1` for the second IGDB
+ * game literally titled "Thor: God of Thunder"), so a single-hyphen-only
+ * regex rejects real, already-live IGDB slugs as invalid — confirmed live:
+ * 1,186 of 26,676 synced Prompt 7C catalogue records carry a `--N` slug,
+ * and at least one already-cached `games` row does too
+ * (`tom-clancys-rainbow-six-vegas--1`). Validated before any local/IGDB
+ * lookup so an obviously-invalid `/games/[slug]` request 404s immediately
+ * with zero DB or IGDB calls — part of the abuse boundary documented in
+ * game-sync.ts.
  */
 export const gameSlugSchema = z
   .string()
   .trim()
   .min(1)
   .max(120)
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  .regex(/^[a-z0-9]+(?:-+[a-z0-9]+)*$/);
 
 /** Shared by /api/search and the /search page — caps length so a query can't be used to abuse local ILIKE or the IGDB search wrapper. */
 export const searchQuerySchema = z.string().trim().min(1).max(100);

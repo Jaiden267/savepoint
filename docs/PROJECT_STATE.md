@@ -4,17 +4,19 @@ Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
 _Last updated: 2026-08-13 (Prompt 7C — broad IGDB catalogue semantic
-indexing, Gates A1/A2/B/C/D complete, **Gate E in progress**: discovery
-of the full Balanced profile (26,676 candidates) is complete, and 17,905
-of those are now synced to Pinecone (125 from Gates C/D + 5,975 from Gate
-E session 1 + 5 from a disclosed out-of-scope verification sync + 10,000
-from an authorized bounded continuation + 1,800 from a final
-continuation's first chunk), with 8,771 still pending. The batching fix
-has been reviewed, committed, and pushed (`7e91ec1`). A real counter
-mismatch (the process believed it processed 2,000 records; the ledger and
-Pinecone each independently showed only 1,800 new ones) was investigated
-to a **proven, not merely theorized, root cause**: 200 of the 1,800 rows
-had `attempt_count=2` (claimed twice within one invocation) —
+indexing, **all gates A1/A2/B/C/D/E complete**: discovery of the full
+Balanced profile (26,676 candidates) is complete, and **all 26,676 are
+now synced to Pinecone** (125 from Gates C/D + 5,975 from Gate E session
+1 + 5 from a disclosed out-of-scope verification sync + 10,000 from an
+authorized bounded continuation + 1,800 from a halted chunk + 8,771 from
+the final continuation). `pending=0` in the ledger, reconciling exactly
+with the discovery total — `status` reports full coverage as safe to
+claim. The batching fix was reviewed, committed, and pushed (`7e91ec1`).
+A real counter mismatch that halted an earlier chunk (the process
+believed it processed 2,000 records; the ledger and Pinecone each
+independently showed only 1,800 new ones) was investigated to a
+**proven, not merely theorized, root cause**: 200 of the 1,800 rows had
+`attempt_count=2` (claimed twice within one invocation) —
 `1,600×1 + 200×2 = 2,000`, exactly matching the mismatch. The confirmed
 mechanism: `finalizeSyncRow` never checked for Supabase write errors, so
 a silently-failed finalize left a row `pending` with an unchanged
@@ -32,10 +34,18 @@ per instruction); and the orchestrator gained a per-invocation
 already-examined-id guard plus `itemsProcessed` now reflecting only
 CONFIRMED outcomes. 9 new regression tests (16 total in
 `sync-orchestrator.test.ts`), including one that deterministically
-reproduces the exact live bug. See
+reproduces the exact live bug. This fix (committed as `fd88b39`) was
+proven correct across all five chunks of the final continuation — no
+counter mismatch recurred. See
 [PINECONE.md](./PINECONE.md#root-cause-found-and-fixed--confirmed-live-not-just-theorized-2026-08-13)
-for the full proof, fix, and proposed ceilings for the remaining 8,771
-records.
+for the fix proof, and
+[PINECONE.md](./PINECONE.md#gate-e-final-continuation--complete-2026-08-13)
+for the final continuation's per-chunk results and completion report.
+Manual Gate E browser verification then found two real defects (a
+double-hyphen IGDB slug 404, and a quick-search-vs-Standard-search
+ranking inconsistency) — both proven, fixed, regression-tested, and
+manually re-verified by the user in the browser; **Prompt 7C is now
+fully complete across every gate, with manual verification passed.**
 Gate A1 (migration `20260813120000_add_igdb_catalogue_sync_infrastructure.sql`)
 applied and live-verified by the user. Gate A2 built the resumable,
 checkpointed catalogue-discovery system (three new tables, one atomic
@@ -754,7 +764,170 @@ summary here:
   ≤50 IGDB requests, ≤90 minutes, ≤3,600,000 margined tokens — a single
   continuation (no longer needs splitting, thanks to the request-
   efficiency and counting fixes together).
-- Not committed, not pushed.
+- Committed and pushed (`fd88b39`).
+
+### Gate E final continuation — complete (this pass)
+
+User confirmed live Pinecone usage (3.6M/10M tokens, resets 2026-09-01)
+and authorized the final continuation for all 8,771 remaining pending
+records with the exact proposed ceilings. Full per-chunk results in
+[PINECONE.md](./PINECONE.md#gate-e-final-continuation--complete-2026-08-13);
+summary here:
+
+- Preflight reconfirmed the accepted checkpoint unchanged and the fix
+  commit present; a `sync --limit 100` dry-run made zero writes.
+- **Five chunks (2,000/2,000/2,000/2,000/771), every one independently
+  reconciled** — ledger delta, Pinecone delta, and confirmed-synced count
+  matched exactly each time. No counter mismatch recurred anywhere in
+  this continuation.
+- **Totals**: 8,771/8,771 records synced, 44/50 IGDB requests, ~18.5/90
+  minutes, ~1,611,927 raw / ~2,095,503 margined tokens — all well inside
+  every cumulative ceiling.
+- **Final state**: ledger `pending=0 synced=26,676 failed=0
+ineligible=0` — reconciles exactly with the 26,676-candidate discovery
+  total; `status` reports full coverage as safe to claim. Pinecone raw
+  count 26,686 (26,676 v2 catalogue + 9 pre-existing legacy v1 + 1
+  ordinary organic on-demand-sync overlap — the same benign pattern
+  documented earlier, not corruption). 25/25 sampled records verified.
+  Every new record carries `schema_version: 2`. No write to the `games`
+  table occurred; no fabricated ratings/reviews/activity. Lease free.
+- **No code changes were needed** this continuation — the already-
+  committed fix (`fd88b39`) held across all five chunks.
+- **Automated suite re-run clean**: lint (0 errors), typecheck (clean),
+  format:check (clean), build (all 29 routes), verify-standalone (5/5),
+  tests **558/559** (same pre-existing `drawer.test.tsx` flake, reported
+  honestly, not touched).
+- **Expected Pinecone dashboard usage**: ≈5.21M/10M (3.6M confirmed
+  starting point + ~1.61M raw tokens this continuation used), ≈4.79M
+  headroom remaining before the 2026-09-01 reset — the dashboard remains
+  the only authoritative source, no SDK query endpoint exists.
+- **Manual semantic-search verification deferred to the user**: this
+  session's in-agent browser tooling could not reach a stable page load
+  against the dev server (no `GET /search` request ever reached the dev
+  server's own logs — a tooling/environment issue on this UNC share, not
+  a finding about the app). A specific checklist is left for the user in
+  PINECONE.md.
+- Not committed, not pushed (docs only, this update).
+
+**Prompt 7C is complete** (records indexed): all gates (A1/A2/B/C/D/E)
+done, full Balanced-profile catalogue (26,676 games) indexed in Pinecone,
+zero pending records, zero failures, zero duplicate `igdb_id`s. Manual
+Gate E browser verification then found a real, proven defect in that same
+work — see below — now fixed.
+
+### Global search dialog: double-hyphen slug 404 — found and fixed (this pass)
+
+Manual browser testing (signed out) found searching the global ⌘K dialog
+for "thor" returned two genuinely distinct "Thor: God of Thunder" (2011)
+games (correctly not deduped — different `igdb_id`s); clicking the
+uncached one 404'd at `/games/thor-god-of-thunder--1`. Full proof and fix
+in
+[PINECONE.md](./PINECONE.md#global-search-dialog-double-hyphen-slug-404--found-and-fixed-2026-08-13);
+summary here:
+
+- **Proven root cause**: `gameSlugSchema`'s regex required single
+  hyphens only, rejecting IGDB's own `--N` duplicate-name slug suffix
+  (a real, live IGDB slug shape) — `/games/[slug]` called `notFound()`
+  before any import lookup ran, confirmed by reading the page source
+  directly. Not new, not cosmetic, not search-dialog-specific: a live
+  query found an **already-cached** `games` row with this exact defect
+  (`tom-clancys-rainbow-six-vegas--1`), and a full scan found **1,186 of
+  26,676 (4.4%)** synced catalogue records carry this slug shape — every
+  one of those was being silently dropped from **every semantic search
+  result** via the same schema reused in `pineconeCatalogueRecordSchema`.
+- **Fixed, two layers**: widened `gameSlugSchema`'s regex to accept
+  IGDB's real slug shape (still rejects leading/trailing hyphens,
+  uppercase, spaces); `SearchCommandDialog` now routes uncached results
+  through the same POST-based `importCatalogueGameAction` the Pinecone
+  catalogue-only results use, instead of a presumed client-guessed URL
+  (cached results still navigate directly by their real stored slug).
+- **Live-reproduced against the production standalone build**: before
+  the fix, `GET /games/tom-clancys-rainbow-six-vegas--1` rendered "Page
+  not found"; after rebuilding with the fix, the same URL renders the
+  real game (confirmed via its actual `<h1>` heading in the response).
+- **16 new regression tests** across `gameSlugSchema`,
+  `pineconeCatalogueRecordSchema`, `semanticSearch`, `game-catalogue`'s
+  `searchGames` (duplicate-titled distinct games stay distinct, keyed by
+  `igdb_id`), `GamePage`, and `SearchCommandDialog` (cached vs.
+  catalogue-only activation, keyboard and click, the exact mixed Thor
+  scenario end-to-end).
+- **Automated suite**: lint/typecheck/format/build/verify-standalone all
+  clean. `npm test`: **573/574** (+15 net new tests), same single
+  pre-existing `drawer.test.tsx` flake.
+- No catalogue discovery/sync run; no Pinecone index or migration
+  touched; no legacy records deleted; no recommendations started. Not
+  committed, not pushed.
+
+### Quick-search vs. full Standard search inconsistency — found and fixed (this pass)
+
+Manual testing found "lego star war" showed a real, uncached game in the
+global quick-search dialog but not in full `/search` Standard mode,
+despite both calling the identical `searchGames(query)` service with
+byte-identical preserved query text. Full proof in
+[PINECONE.md](./PINECONE.md#quick-search-vs-full-standard-search-inconsistency--found-and-fixed-2026-08-13);
+summary here:
+
+- **Ruled out**: query corruption, a dedup/identity bug (the two "LEGO
+  Star Wars III: The Clone Wars" results are genuinely distinct IGDB
+  games, correctly kept distinct), and local-cache truncation (only 3
+  local rows match, both were always guaranteed included).
+- **Proven root cause, two compounding defects**: (1) `searchIgdbGames`
+  truncated to `limit` internally, _before_ merging with local results —
+  an uncached candidate's survival depended entirely on which arbitrary
+  subset IGDB's own not-guaranteed-stable live relevance ordering
+  delivered in one specific call; (2) `TYPE_PENALTY`/`EXCLUDED_GAME_TYPES`
+  used a snake_case shape (`"main_game"`) that never matches IGDB's real
+  returned label text (`"Main Game"`, confirmed live) — every real
+  result silently fell through to the "unknown" type penalty, so a
+  canonical Main Game entry couldn't outrank dozens of same-title Port
+  duplicates. The existing test suite used the same wrong shape as its
+  own fixtures, masking this.
+- **Fixed**: `searchIgdbGames` now returns its full overfetched pool,
+  letting `searchGames` do exactly one final rank+truncate over the
+  complete merged set; `TYPE_PENALTY`/`EXCLUDED_GAME_TYPES` corrected to
+  IGDB's real label text; `SearchResults` extracted to its own file
+  (`src/app/search/search-results.tsx`) purely for direct testability
+  (Next's route-file export whitelist rejects extra named exports on
+  `page.tsx`).
+- **Live-reproduced against the production standalone build**: both
+  `/search?q=lego%20star%20war` and `/api/search?q=lego%20star%20war`
+  now consistently include "LEGO Star Wars III: The Clone Wars" across
+  three separate live calls spanning past the IGDB search cache's TTL.
+- **16 new regression tests** across `search.ts` (new test file, no
+  internal truncation, real-type prioritization), `ranking.ts` (real
+  IGDB label text, fixtures corrected), `game-catalogue.ts` (one final
+  rank+truncate over a full merged set), the dialog (exact query
+  preservation), and new `SearchResults`/`SearchPage` coverage
+  (`src/app/search/page.test.tsx`, new file).
+- **Automated suite**: lint/typecheck/format/build/verify-standalone all
+  clean. `npm test`: **586/587** (+13 net new tests), same single
+  pre-existing `drawer.test.tsx` flake.
+- No catalogue discovery/sync run; no Pinecone index or migration
+  touched; no legacy records deleted; no recommendations started. Not
+  committed, not pushed.
+
+**Manual verification (user, browser, 2026-08-13): PASSED.** Confirmed:
+quick search for "lego star war" displays "LEGO Star Wars III: The Clone
+Wars"; "Open full search" preserves the query; the same game now appears
+in full Standard search; the result opens the correct game page;
+legitimate same-title games with different IGDB IDs remain distinct;
+both distinct "Thor: God of Thunder" results open successfully; the
+double-hyphen route `/games/thor-god-of-thunder--1` works; catalogue-only
+results continue using the POST-based import boundary; no unexpected
+console errors.
+
+### Prompt 7C / Gate E — fully complete (this pass)
+
+Both defects found during Gate E's manual browser verification (the
+double-hyphen IGDB slug 404 and the quick-search-vs-Standard-search
+ranking inconsistency, both above) are fixed, regression-tested, and
+manually re-verified by the user in the browser. Combined with the
+already-complete catalogue synchronization (26,676/26,676 Balanced-profile
+games indexed, `pending=0`, zero duplicates), **every gate of Prompt 7C
+(A1 → A2 → B → C → D → E) is now done and manually verified end to
+end** — see
+[PINECONE.md](./PINECONE.md#prompt-7c--gate-e--fully-complete-2026-08-13)
+for the consolidated summary. Not committed, not pushed.
 
 ## Prompt 5 — Phase A (this pass)
 
