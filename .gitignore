@@ -34,6 +34,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# operator transcripts / ad hoc session logs (e.g. gate-*-sync-*.log from
+# PowerShell Start-Transcript during manual catalogue-sync gates) — local
+# operational artifacts, never build output or source, never committed.
+*.log
+
 # env files — every real env file is ignored; the checked-in example with
 # empty placeholders is explicitly allowed back in.
 .env

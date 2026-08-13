@@ -127,11 +127,11 @@ confirmed/customized it" — null until the onboarding form is submitted.
 
 Supabase Auth → **URL Configuration**, in the project's dashboard:
 
-| Setting                       | Value                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Site URL** (local dev)      | `http://localhost:3000`                                                                                                                                                                                                                                                                                                                                                  |
-| **Redirect URLs** (local dev) | `http://localhost:3000/auth/callback` — add as an exact entry. Recommended additional entry: `http://localhost:3000/**` (wildcard) as a safety net for any query-string variations.                                                                                                                                                                                      |
-| **Production placeholder**    | Once the ZimaOS deployment domain is known (later prompt): Site URL `https://YOUR_PRODUCTION_DOMAIN`, Redirect URL `https://YOUR_PRODUCTION_DOMAIN/auth/callback` (+ the same `/**` wildcard recommendation). Update `NEXT_PUBLIC_APP_URL` to match for that build — every `emailRedirectTo`/`redirectTo` in this codebase is built from that variable, never hardcoded. |
+| Setting                       | Value                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Site URL** (local dev)      | `http://localhost:3000`                                                                                                                                                                                                                                                                                                                           |
+| **Redirect URLs** (local dev) | `http://localhost:3000/auth/callback` — add as an exact entry. Recommended additional entry: `http://localhost:3000/**` (wildcard) as a safety net for any query-string variations.                                                                                                                                                               |
+| **Production** (confirmed)    | Dedicated authentication domain: `savepointauth.uk`. Site URL `https://savepointauth.uk`, Redirect URL `https://savepointauth.uk/auth/callback` (+ the same `/**` wildcard recommendation). `NEXT_PUBLIC_APP_URL` must match for that build — every `emailRedirectTo`/`redirectTo` in this codebase is built from that variable, never hardcoded. |
 
 Two more dashboard settings this prompt's design assumes but does not (and
 cannot) change remotely — verify they match:
@@ -143,6 +143,14 @@ cannot) change remotely — verify they match:
   this project's Zod schema enforces 8 characters minimum client- and
   server-side; consider setting the dashboard's own minimum to match (its
   default is 6) so the two don't disagree.
+- **Custom SMTP** (Authentication → SMTP Settings) — **confirmed
+  configured**, using Resend as the provider, and manually tested
+  successfully (a real signup/reset email was sent and received). This is
+  a dashboard-only setting; there is no application code integration and
+  no `RESEND_API_KEY` (or similar) env var — Supabase calls Resend's SMTP
+  endpoint directly using credentials stored in the dashboard. Needed
+  because Supabase's default built-in email sending has rate limits too
+  low for real usage.
 
 ## Manual integration checklist
 
