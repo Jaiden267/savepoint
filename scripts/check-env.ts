@@ -20,6 +20,7 @@ const required = [
 
 const optional = [
   "NEXT_PUBLIC_APP_URL",
+  "NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL",
   "PINECONE_INDEX_NAME",
   "ADMIN_USER_IDS",
   "CRON_SECRET",

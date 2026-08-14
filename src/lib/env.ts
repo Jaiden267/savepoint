@@ -14,6 +14,15 @@ const clientSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
   NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
+  // Optional. Public contact address for privacy requests, shown on
+  // /privacy. Left unset until a real, monitored mailbox exists — never
+  // defaulted to a guessed or unmonitored address. Blank string (the
+  // .env.example placeholder shape) is treated the same as unset.
+  NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value ? value : undefined)),
 });
 
 const parsed = clientSchema.safeParse({
@@ -21,6 +30,8 @@ const parsed = clientSchema.safeParse({
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
   NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL:
+    process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL,
 });
 
 if (!parsed.success) {

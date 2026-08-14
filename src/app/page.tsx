@@ -74,10 +74,6 @@ export default function Home() {
           ))}
         </div>
       </section>
-
-      <p className="text-muted-foreground pb-16 text-center text-xs">
-        Foundation scaffold — these features arrive in later milestones.
-      </p>
     </main>
   );
 }

@@ -66,7 +66,22 @@ case, not a mandate.
 one value: narrow (`max-w-lg`/`max-w-sm`) for single-column forms
 (settings, onboarding, auth), wider (`max-w-3xl`–`max-w-6xl`) for grids and
 lists. This was already the existing convention; Prompt 8 didn't change it,
-just confirmed it's intentional.
+just confirmed it's intentional. Long-form text content (e.g. `/privacy`)
+also uses `max-w-3xl` — narrow enough for a comfortable reading measure,
+without introducing a new container size.
+
+## Footer link pattern
+
+`SiteFooter` (`src/components/layout/site-footer.tsx`, renders once from
+the root layout, so it's identical on every route) is a three-item flex
+row: copyright, then any footer nav links, then the tagline — `justify-between`
+on `sm:` and up naturally centres a lone middle link between the two
+outer lines; `flex-col items-center` on mobile stacks the same order
+centred. A footer link uses `LinkButton` `variant="link" size="sm"` (real
+`<a>` semantics, the shared focus-visible ring, an adequate touch target
+from the button primitive's own sizing) rather than a bare styled `<a>`,
+so it doesn't need its own one-off focus/touch-target styling. `/privacy`
+was the first link added here (Prompt 9+1 content pass).
 
 ## Surface & border hierarchy
 

@@ -131,6 +131,112 @@ fully manually verified**; Prompt 4 — core tracking — remains **complete
 and fully manually verified**; all histories are preserved below
 unchanged.)._
 
+## Privacy policy page + footer link (this pass)
+
+Small, self-contained content/navigation change — no auth, database,
+Pinecone, recommendation or catalogue behaviour touched; no migration; no
+catalogue discovery/sync run; no production data touched.
+
+**Removed**: the "Foundation scaffold — these features arrive in later
+milestones." placeholder `<p>` from `src/app/page.tsx` (the home/landing
+page). It was a standalone eyebrow-style line below the feature-card
+section, using only inline Tailwind utility classes — no separate
+constants, styles, or now-unused imports were left behind. Not replaced
+with another placeholder, per instruction.
+
+**New**: `src/app/privacy/page.tsx` — a public `/privacy` policy page,
+using the shared `PageHeader`/`Heading`/`Text` primitives and the existing
+`max-w-3xl` narrow-content container width convention for comfortable
+long-form reading. The policy was written from direct inspection of this
+codebase, `src/types/database.ts`, and `docs/` (not invented): it
+accurately describes account data (email/password live in Supabase Auth,
+not duplicated into Savepoint's own `profiles` table), all
+user-generated-content tables (ratings/statuses, diary entries, reviews,
+comments, likes, follows, lists, `recommendation_feedback`), session
+cookies, search/recommendation signals, and IP-based in-memory rate
+limiting. It names exactly the service providers this app genuinely
+integrates with — Supabase, Resend (only as the SMTP relay behind
+Supabase Auth's own account emails, confirmed against `docs/AUTH.md`; no
+direct Resend API integration exists), Pinecone (game-catalogue search;
+receives synthetic tag-based query strings, never raw account/review
+data), and IGDB/Twitch (game-lookup queries only, never account data) —
+and deliberately does **not** claim Cloudflare or any other hosting
+provider processes data, since `docs/AUTH.md` confirms the production
+hosting/domain is still TBD, not yet part of any real deployed request
+path. It states plainly, rather than inventing an answer, that: the
+formal operating entity/address, a documented data-retention schedule,
+and a completed international-transfer-safeguards review are all
+pre-launch action items; there is no self-service account-deletion
+feature yet (confirmed — no such action exists in
+`src/server/actions/`); and it does not claim any analytics/advertising
+cookie use or a cookie-consent banner, since `package.json` has no such
+dependency and none was found in the codebase.
+
+**Privacy contact**: no existing monitored contact address was found
+anywhere in the repo or docs, so none was invented. A new optional
+`NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL` client-safe env var was added to
+`src/lib/env.ts`'s existing `clientSchema` (empty/unset never fails
+validation — a blank string is treated the same as unset), `.env.example`,
+`docs/ENVIRONMENT.md`, and `scripts/check-env.ts`'s optional list. When
+unset, `/privacy`'s contact section renders an honest "not yet been
+published" notice instead of a broken `mailto:` link — this is flagged
+below as a required pre-launch action, not silently hidden.
+
+**Footer**: `src/components/layout/site-footer.tsx` gained a "Privacy"
+link (`LinkButton` `variant="link" size="sm"`, so it gets a real `<a>`,
+the existing focus-visible ring, and an adequate ≥24px touch target for
+free from the shared button primitive) placed as the middle child of the
+existing three-item flex row — between the copyright line and the
+tagline, in both DOM order and (via the row's existing `sm:justify-between`)
+visual position on wide screens; on narrow screens the existing
+`flex-col items-center` layout already stacks it centred between the
+other two lines. `SiteFooter` renders once, in the root layout, so this
+link appears on every route, signed in or out.
+
+**Testing** (new): `src/app/page.test.tsx` (scaffold text gone, hero/
+feature content intact), `src/app/privacy/page.test.tsx` (primary
+heading, all section headings present, the real provider names appear,
+ICO link, mailto-link-present-vs-honest-notice for both contact-email
+states, axe), `src/components/layout/site-footer.test.tsx` (working
+`/privacy` link, copyright → Privacy → tagline DOM order, keyboard
+reachability via Tab, no nested interactive elements, axe).
+
+**Automated verification**: `npm run lint` (0 errors, same 24 pre-existing
+intentional-unused-param warnings), `npm run typecheck` (clean), `npm run
+format:check` (clean, after one `npm run format` pass), `npm run build`
+(all 33 routes including the new `/privacy`), `npm run verify-standalone`
+(5/5). `npm test`: **861/862** — the one failure is the same pre-existing,
+already-documented `drawer.test.tsx` focus-trap flake (zero diff on that
+file this pass).
+
+**Not verified in-session**: the in-agent Browser pane tool was
+unavailable in this environment ("the Browser pane is not displayed" on
+every screenshot/navigate attempt) — the same pre-existing tooling
+limitation recorded earlier in this file for this UNC-share project, not
+a new finding. No visual/manual browser check of `/privacy` or the footer
+was possible in-session.
+
+**Manual browser verification (performed by the user, passed).** `/privacy`
+renders successfully; the footer's Privacy link works; desktop and mobile
+layouts (including the three-column-grid footer centering fix) render
+correctly with no overflow; a configured `NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL`
+displays correctly on the page; the obsolete "Foundation scaffold" text is
+confirmed gone from the home page; no unexpected browser-console errors
+appeared.
+
+**Manual actions still required before public launch** (stated plainly on
+the policy page itself, not hidden): set `NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL`
+to the real, monitored mailbox that will be used in production (a working
+value was confirmed to render correctly during manual verification, but no
+production mailbox has been finalized); decide and document the formal
+operating entity/registered address; write and publish an actual
+data-retention schedule; complete a provider-by-provider international-
+transfer safeguards review; decide whether a self-service account-deletion
+feature should be built before launch (not built this pass — out of
+scope).
+
+Not committed, not pushed.
+
 ## Prompt 8 — Design, responsive layout & accessibility pass
 
 Full architecture and conventions live in [DESIGN.md](./DESIGN.md); this
