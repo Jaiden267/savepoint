@@ -3,7 +3,16 @@
 Continuity notes between prompts. Read this first when picking the project
 back up — it says what's actually built, not just what's planned.
 
-_Last updated: 2026-08-13 (Prompt 7C — broad IGDB catalogue semantic
+_Last updated: 2026-08-14 (small content/navigation pass: removed the
+"Foundation scaffold" placeholder label from the home page, added a public
+`/privacy` policy page, and a "Privacy" link to the shared site footer —
+see "Privacy policy page + footer link" below; **manually verified by the
+user, every item passed.** Prompt 9 — personalized recommendations with
+human-readable reasons, implementation complete, automated verification
+clean, **manually verified by the user via the full two-user browser
+checklist, every item passed** — see "Prompt 9" below and
+[RECOMMENDATIONS.md](./RECOMMENDATIONS.md) for full detail. Prompt 7C —
+broad IGDB catalogue semantic
 indexing, **all gates A1/A2/B/C/D/E complete**: discovery of the full
 Balanced profile (26,676 candidates) is complete, and **all 26,676 are
 now synced to Pinecone** (125 from Gates C/D + 5,975 from Gate E session
@@ -1086,6 +1095,134 @@ No Pinecone/IGDB/recommendation changes, no catalogue discovery/sync run,
 no database migration, no direct Resend API integration. Not committed,
 not pushed.
 
+## Prompt 9 — Personalized recommendations with reasons (this pass)
+
+Full architecture in [RECOMMENDATIONS.md](./RECOMMENDATIONS.md) (new); this
+section tracks completion status only. Closes out the "recommendations +
+reasons, `recommendation_feedback`" line deferred from Prompt 7/7C — built
+entirely on the existing, fully-synced 26,676-game Balanced catalogue
+index; no catalogue discovery, no Pinecone bootstrap/bulk upsert, no bulk
+`games` row creation.
+
+Plan went through four review rounds before approval (the plan file's own
+revision history has the full account): round 1 was rejected for
+unverified assumptions; round 2 fixed a blocking finding
+(`recommendation_feedback.game_id` was `NOT NULL`, making it structurally
+impossible to record feedback for a catalogue-only, unimported game — most
+Pinecone recommendations) but had six further gaps (an unsafe migration,
+client-trusted identity fields, a ranking engine needing Pinecone fields
+the existing search API didn't return, an impression-idempotency check
+that could wrongly re-skip a partially-new batch, click tracking losable
+to navigation cancellation, ambiguous feedback-button copy); round 3 fixed
+all six; round 4 (approved) fixed three more found in round 3 ("Helpful"
+feedback was recorded but never fed back into ranking, an undefined
+`minMaxNormalize` edge case, no hardening on the click-tracking API route).
+
+**Phase A** (migration, gated — created, then the assistant stopped and
+asked the user to apply it): one new file,
+`supabase/migrations/20260813130000_add_igdb_id_to_recommendation_feedback.sql`
+— adds `igdb_id integer not null check (igdb_id > 0)` as the stable
+cross-boundary identity (nullable-first → backfilled from existing
+`game_id` → fail-loudly, not silently, on any unbackfillable row → then
+`NOT NULL`), relaxes `game_id` to nullable, adds a partial unique index
+`(user_id, igdb_id, event_type) WHERE event_type IN ('saved', 'dismissed',
+'completed')` enabling the same insert-then-`23505`-swallow toggle
+idempotency `review_likes` already uses (after a fail-loud pre-check for
+any existing duplicates), and an additive `GRANT INSERT (igdb_id)`.
+**Applied by the user via the linked Supabase CLI, confirmed live in both
+local and remote migration history.** `src/types/database.ts` was
+regenerated from the linked live schema afterward and the diff reviewed —
+exactly `recommendation_feedback.igdb_id` added and `game_id` made
+nullable, nothing else changed.
+
+**Phase B (this pass, implementation complete):**
+
+- `src/lib/pinecone/search.ts`: new `searchGameHits()` (richer typed hits —
+  `genres`/`platforms`/`gameModes` alongside the existing fields, 3 new
+  `RESULT_FIELDS`); the existing `searchGameIds()` (used by
+  `semantic-search.ts`) is now a thin delegator over the same underlying
+  query, its return shape and behavior unchanged, proven by its existing
+  tests passing unmodified plus a new raw-fields-preserved regression test.
+- `src/lib/igdb/search-cache.ts`: genericized
+  (`getCachedSearch<T>`/`setCachedSearch<T>`, backward-compatible default),
+  new `invalidateCacheByPrefix(prefix)` export.
+- `src/lib/validation/recommendations.ts` (new): feedback event-type
+  schema (`saved`/`dismissed`/`completed` only — a client can never claim
+  `shown`/`clicked`), igdb-id schema, a deduped/capped impression-batch
+  schema, a genre-hints schema.
+- `src/server/services/recommendations.ts` (new, the core engine):
+  `buildUserTasteProfile`, `buildSyntheticQuery`, `rankCandidates`,
+  `generateReason`, `getRecommendations`, `recordClick`, plus
+  `RecommendationsUnavailableError`/`RecommendationsRateLimitedError`. See
+  [RECOMMENDATIONS.md](./RECOMMENDATIONS.md) for the exact weighting
+  tiers, ranking formula, exclusion rules, and cold-start modes.
+- `src/server/actions/recommendations.ts` (new):
+  `toggleRecommendationFeedbackAction`,
+  `recordRecommendationImpressionsAction`,
+  `importRecommendedCatalogueGameAction`.
+- `src/app/api/recommendations/click/route.ts` (new): the hardened
+  `sendBeacon` target — auth, same-origin (Origin/Sec-Fetch-Site),
+  Content-Type, body-size, and `igdbId` validation, in that order, before
+  `recordClick` is ever called.
+- `src/components/games/catalogue-result-card.tsx`: gained one optional,
+  backward-compatible `action` prop (defaults to the existing
+  `importCatalogueGameAction`, zero behavior change for every existing
+  caller) so recommendations can pass its own click-recording action
+  without forking the component.
+- New `src/components/recommendations/` components: `RecommendationCard`
+  (composes the existing `PosterCard`/`CatalogueResultCard`, adds a reason
+  caption + feedback footer, fires the click beacon), `RecommendationGrid`,
+  `RecommendationImpressionTracker`, `RecommendationFeedbackButtons`
+  (plain `useState`, not `useOptimistic` — a real bug found during
+  testing: `useOptimistic`'s displayed value reverts to its base value
+  once a transition settles unless a fresh server-driven prop feeds it
+  back, which this component has no source for; using it here would make
+  a successful toggle flash pressed then silently snap back), `ColdStartView`
+  (genre picker, honest copy, never fabricates personalization),
+  `RecommendationsRegenerateButton`.
+- `src/app/recommendations/page.tsx` + `recommendations-results.tsx` (new):
+  mirrors `/discover`'s seed-canonicalizing-redirect + split-for-
+  testability pattern exactly.
+- `src/lib/auth/route-policy.ts`: `/recommendations` added to both
+  `REQUIRES_AUTH_PATHS` and `REQUIRES_COMPLETED_PROFILE_PATHS`.
+- `src/components/layout/site-header.tsx` / `mobile-nav-drawer.tsx`: new
+  "For You" nav entry. `mobile-nav-bar.tsx`'s fixed 5-tab bar deliberately
+  left untouched — a 6th destination there is a bigger nav-structure
+  decision than this feature warrants on its own.
+- `src/server/actions/library.ts` / `reviews.ts`: now also call
+  `invalidateCacheByPrefix('recommendations:${userId}:')` after a
+  successful rating/status change/review, so a fresh signal is reflected
+  on the next generation rather than serving a stale cached page.
+
+**Testing**: 191 new/changed tests across every layer — pure-function
+fixtures (`minMaxNormalize`'s no-NaN guarantee including single-value and
+equal-value arrays, `rankCandidates` proving the blend responds to a real
+Pinecone-score change alone, deterministic `generateReason`), an
+integration-style Supabase-stub suite for `buildUserTasteProfile`/
+`getRecommendations` (cold start never calls Pinecone, preference-assisted
+mode, rate-limiting before any Pinecone call, exclusion by any library
+status, zero-eligible-candidates unavailability, a catalogue-only
+candidate creating no `games` row, cache-hit skip, a reduced-results
+notice, Pinecone-failure propagation, cross-user cache-key isolation),
+identity-trust tests (no action ever accepts a client-supplied
+`gameId`/`userId`/`slug`), all 5 layers of the click-route hardening
+independently, `sendBeacon`-unavailable and `sendBeacon`-returns-`false`
+fallback paths, partial-overlap impression-batch idempotency, and
+`vitest-axe` accessibility checks on every new component. `npm run
+typecheck` clean throughout.
+
+**Automated verification**: see "Verification" below for the full
+lint/typecheck/test/format/build/verify-standalone results.
+
+**Manually verified by the user via the full two-user browser checklist —
+every item passed**: personalized recommendations load independently for
+both users, recommendation reasons render correctly, excluded/already-owned
+games behave as documented, feedback/dismissal/navigation all behave
+correctly, reloading preserves the expected state, and no unexpected
+browser-console errors appeared. See
+[RECOMMENDATIONS.md](./RECOMMENDATIONS.md#manual-two-user-browser-checklist)
+for the exact checklist.
+
 ## Prompt 5 — Phase A (this pass)
 
 Prompt 5 combines what the original roadmap sketched as two separate
@@ -1712,7 +1849,27 @@ checks re-ran clean afterward (`npm test` **462/462**, 61 files), and **the
 user re-verified the fix in the browser — every item passed.** Prompt 8 is
 complete; nothing about it is outstanding.
 
+**Prompt 9 (personalized recommendations with reasons, this pass)**: `npm
+run lint` (0 errors, same pre-existing intentional-unused-param warnings,
+24 total), `npm run typecheck` (clean), `npm run format:check` (clean,
+after one `npm run format` pass), `npm run build` (all 30 routes,
+`/recommendations` and `/api/recommendations/click` both dynamic, not
+statically generated), `npm run verify-standalone` (5/5). `npm test`:
+**847/848** — the one failure is the same pre-existing, already-documented
+`drawer.test.tsx` focus-trap flake (zero diff on that file this pass,
+reproduced identically before any recommendations code was touched).
+**Manually verified by the user — the full two-user browser checklist in
+[RECOMMENDATIONS.md](./RECOMMENDATIONS.md#manual-two-user-browser-checklist)
+passed every item.**
+
 ## Next up
+
+**Prompt 9 — personalized recommendations with reasons — complete.**
+Implementation done, automated verification clean, and the user has now
+personally run the full two-user browser checklist — **every item
+passed.** See "Prompt 9" above and
+[RECOMMENDATIONS.md](./RECOMMENDATIONS.md#manual-two-user-browser-checklist)
+for the exact checklist. Nothing about Prompt 9 is outstanding.
 
 **Prompt 4 is complete and closed.** Implemented, automated-checks-clean,
 the two regressions found by initial manual testing are fixed and
@@ -1755,9 +1912,10 @@ the wider IGDB catalogue. This is inherent to the approved on-demand
 cached-game indexing architecture and the deliberately bounded Phase B
 backfill. Lexical search is unaffected.
 
-**Recommendations and reasons, and `recommendation_feedback`, are
-explicitly not started** — deferred to a later pass. Nothing else about
-the semantic search half of Prompt 7 is outstanding.
+**Recommendations and reasons, and `recommendation_feedback`, shipped in
+Prompt 9** — see "Prompt 9" above and
+[RECOMMENDATIONS.md](./RECOMMENDATIONS.md). Nothing else about the
+semantic search half of Prompt 7 is outstanding.
 
 **Prompt 8 — design, responsive layout & accessibility pass — complete.**
 See "Prompt 8" above for full detail on what changed. Automated checks

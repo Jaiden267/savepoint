@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Loader2 } from "lucide-react";
 import { useFormStatus } from "react-dom";
 import { importCatalogueGameAction } from "@/server/actions/games";
-import { initialActionState } from "@/lib/action-state";
+import { initialActionState, type ActionState } from "@/lib/action-state";
 import { igdbImageUrl } from "@/lib/igdb/image-url";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +15,15 @@ export interface CatalogueResultCardProps {
   coverImageId: string | null;
   releaseYear?: number | null;
   className?: string;
+  /**
+   * Override the Server Action this form submits to — defaults to
+   * `importCatalogueGameAction`, unchanged for every existing caller.
+   * Recommendations passes `importRecommendedCatalogueGameAction`
+   * (src/server/actions/recommendations.ts), which records a `clicked`
+   * feedback event before performing the same import, so this component
+   * doesn't need to be forked just to add that.
+   */
+  action?: (prevState: ActionState, formData: FormData) => Promise<ActionState>;
 }
 
 function SubmitOverlay() {
@@ -44,11 +53,9 @@ export function CatalogueResultCard({
   coverImageId,
   releaseYear,
   className,
+  action = importCatalogueGameAction,
 }: CatalogueResultCardProps) {
-  const [state, formAction] = useActionState(
-    importCatalogueGameAction,
-    initialActionState,
-  );
+  const [state, formAction] = useActionState(action, initialActionState);
 
   return (
     <form action={formAction} className={cn("flex flex-col gap-2", className)}>

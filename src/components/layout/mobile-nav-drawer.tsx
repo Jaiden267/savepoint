@@ -78,6 +78,13 @@ export function MobileNavDrawer({ username, className }: MobileNavDrawerProps) {
                 Community
               </Link>
               <Link
+                href="/recommendations"
+                onClick={() => setOpen(false)}
+                className={NAV_LINK_CLASSES}
+              >
+                For You
+              </Link>
+              <Link
                 href={`/users/${username}`}
                 onClick={() => setOpen(false)}
                 className={NAV_LINK_CLASSES}

@@ -168,6 +168,7 @@ describe("resolveRoutePolicy", () => {
         "/diary",
         "/home",
         "/lists/new",
+        "/recommendations",
       ]) {
         expect(isGatedPath(pathname)).toBe(true);
       }
@@ -334,6 +335,43 @@ describe("resolveRoutePolicy", () => {
           }),
         ).toEqual({ action: "allow" });
       }
+    });
+  });
+
+  describe("/recommendations — auth + completed profile required", () => {
+    it("redirects unauthenticated visitors to /login with a next param", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: "/recommendations",
+          isAuthenticated: false,
+          onboardingCompleted: false,
+        }),
+      ).toEqual({
+        action: "redirect",
+        destination: "/login",
+        query: { next: "/recommendations" },
+      });
+    });
+
+    it("redirects authenticated-but-incomplete-profile visitors to /onboarding", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: "/recommendations",
+          isAuthenticated: true,
+          onboardingCompleted: false,
+        }),
+      ).toEqual({ action: "redirect", destination: "/onboarding" });
+    });
+
+    it("allows authenticated visitors with a completed profile", () => {
+      expect(
+        resolveRoutePolicy({
+          pathname: "/recommendations",
+          isAuthenticated: true,
+          onboardingCompleted: true,
+          username: "alice",
+        }),
+      ).toEqual({ action: "allow" });
     });
   });
 

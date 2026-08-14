@@ -15,8 +15,20 @@ vi.mock("./client", async (importOriginal) => {
   return { ...actual, ensureConfiguredIndex: mockEnsureConfiguredIndex };
 });
 
-import { searchGameIds, PineconeSearchError } from "./search";
+import { searchGameIds, searchGameHits, PineconeSearchError } from "./search";
 import { PineconeIndexNotBootstrappedError } from "./client";
+
+const ALL_RESULT_FIELDS = [
+  "igdb_id",
+  "schema_version",
+  "slug",
+  "name",
+  "cover_image_id",
+  "release_year",
+  "genres",
+  "platforms",
+  "game_modes",
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -66,21 +78,49 @@ describe("searchGameIds", () => {
     ]);
   });
 
-  it("passes the query and topK through to searchRecords, requesting v2-capable metadata fields", async () => {
+  it("passes the query and topK through to searchRecords, requesting v2-capable metadata fields including tags", async () => {
     mockSearchRecords.mockResolvedValue({ result: { hits: [] }, usage: {} });
 
     await searchGameIds("tactical rpg", 7);
 
     expect(mockSearchRecords).toHaveBeenCalledWith({
       query: { inputs: { text: "tactical rpg" }, topK: 7 },
-      fields: [
-        "igdb_id",
-        "schema_version",
-        "slug",
-        "name",
-        "cover_image_id",
-        "release_year",
-      ],
+      fields: ALL_RESULT_FIELDS,
+    });
+  });
+
+  it("preserves every raw metadata field (e.g. schema_version) in the returned fields object — semantic-search.ts's pineconeCatalogueRecordSchema validation depends on this being the real, unmodified field set", async () => {
+    mockSearchRecords.mockResolvedValue({
+      result: {
+        hits: [
+          {
+            _id: "igdb-303",
+            _score: 0.7,
+            fields: {
+              igdb_id: 303,
+              schema_version: 2,
+              slug: "some-game",
+              name: "Some Game",
+              genres: ["RPG"],
+              platforms: ["PC"],
+              game_modes: ["Single player"],
+            },
+          },
+        ],
+      },
+      usage: {},
+    });
+
+    const hits = await searchGameIds("query", 5);
+
+    expect(hits[0]!.fields).toEqual({
+      igdb_id: 303,
+      schema_version: 2,
+      slug: "some-game",
+      name: "Some Game",
+      genres: ["RPG"],
+      platforms: ["PC"],
+      game_modes: ["Single player"],
     });
   });
 
@@ -116,6 +156,124 @@ describe("searchGameIds", () => {
     mockSearchRecords.mockRejectedValue(new Error("network blip"));
 
     await expect(searchGameIds("query", 5)).rejects.toBeInstanceOf(
+      PineconeSearchError,
+    );
+  });
+});
+
+describe("searchGameHits", () => {
+  it("returns the richer typed shape, including tags, for a well-formed hit", async () => {
+    mockSearchRecords.mockResolvedValue({
+      result: {
+        hits: [
+          {
+            _id: "igdb-404",
+            _score: 0.83,
+            fields: {
+              igdb_id: 404,
+              schema_version: 2,
+              slug: "stealth-game",
+              name: "Stealth Game",
+              cover_image_id: "abc123",
+              release_year: 2021,
+              genres: ["Shooter", "Adventure"],
+              platforms: ["PC"],
+              game_modes: ["Single player"],
+            },
+          },
+        ],
+      },
+      usage: {},
+    });
+
+    const hits = await searchGameHits("stealth game", 10);
+
+    expect(hits).toEqual([
+      {
+        recordId: "igdb-404",
+        igdbId: 404,
+        score: 0.83,
+        slug: "stealth-game",
+        name: "Stealth Game",
+        coverImageId: "abc123",
+        releaseYear: 2021,
+        genres: ["Shooter", "Adventure"],
+        platforms: ["PC"],
+        gameModes: ["Single player"],
+      },
+    ]);
+  });
+
+  it("defaults missing optional fields (coverImageId/releaseYear) to null and missing tag arrays to []", async () => {
+    mockSearchRecords.mockResolvedValue({
+      result: {
+        hits: [
+          {
+            _id: "igdb-505",
+            _score: 0.4,
+            fields: { igdb_id: 505, slug: "bare-game", name: "Bare Game" },
+          },
+        ],
+      },
+      usage: {},
+    });
+
+    const hits = await searchGameHits("query", 5);
+
+    expect(hits).toEqual([
+      {
+        recordId: "igdb-505",
+        igdbId: 505,
+        score: 0.4,
+        slug: "bare-game",
+        name: "Bare Game",
+        coverImageId: null,
+        releaseYear: null,
+        genres: [],
+        platforms: [],
+        gameModes: [],
+      },
+    ]);
+  });
+
+  it("drops a hit missing slug or name, unlike searchGameIds which only requires igdb_id", async () => {
+    mockSearchRecords.mockResolvedValue({
+      result: {
+        hits: [
+          { _id: "rec-a", _score: 0.9, fields: { igdb_id: 1 } },
+          {
+            _id: "rec-b",
+            _score: 0.5,
+            fields: { igdb_id: 2, slug: "only-slug" },
+          },
+          {
+            _id: "rec-c",
+            _score: 0.3,
+            fields: { igdb_id: 3, slug: "full-record", name: "Full Record" },
+          },
+        ],
+      },
+      usage: {},
+    });
+
+    const hits = await searchGameHits("query", 5);
+
+    expect(hits.map((h) => h.igdbId)).toEqual([3]);
+  });
+
+  it("propagates PineconeIndexUnavailableError and PineconeSearchError the same way searchGameIds does — shared underlying query", async () => {
+    mockEnsureConfiguredIndex.mockRejectedValue(
+      new PineconeIndexNotBootstrappedError(),
+    );
+    await expect(searchGameHits("query", 5)).rejects.toBeInstanceOf(
+      PineconeIndexNotBootstrappedError,
+    );
+
+    mockEnsureConfiguredIndex.mockResolvedValue({
+      searchRecords: mockSearchRecords,
+    });
+    mockSearchRecords.mockRejectedValue(new Error("network blip"));
+    await expect(searchGameHits("query", 5)).rejects.toBeInstanceOf(
       PineconeSearchError,
     );
   });

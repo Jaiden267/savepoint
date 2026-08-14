@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth/require-user";
 import { logActionError } from "@/server/actions/log-action-error";
+import { invalidateCacheByPrefix } from "@/lib/igdb/search-cache";
 import {
   setGameStatusSchema,
   rateGameSchema,
@@ -17,9 +18,17 @@ function friendlyLibraryError(): string {
   return "Something went wrong updating your library. Please try again.";
 }
 
-function revalidateLibraryPaths(gameSlug: string) {
+/**
+ * Also invalidates this user's cached recommendation results — a rating
+ * or library-status change is exactly the kind of signal that should be
+ * reflected on the user's very next /recommendations request rather than
+ * waiting out the cache's own short TTL (see docs/RECOMMENDATIONS.md's
+ * cache-invalidation section).
+ */
+function revalidateLibraryPaths(gameSlug: string, userId: string) {
   revalidatePath(`/games/${gameSlug}`);
   revalidatePath("/library");
+  invalidateCacheByPrefix(`recommendations:${userId}:`);
 }
 
 /**
@@ -71,7 +80,7 @@ export async function setGameStatusAction(
     return { status: "error", message: friendlyLibraryError() };
   }
   if (updated.length > 0) {
-    revalidateLibraryPaths(gameSlug);
+    revalidateLibraryPaths(gameSlug, user.id);
     return { status: "success", message: "Status updated." };
   }
 
@@ -81,7 +90,7 @@ export async function setGameStatusAction(
     .insert({ game_id: gameId, status });
 
   if (!insertError) {
-    revalidateLibraryPaths(gameSlug);
+    revalidateLibraryPaths(gameSlug, user.id);
     return { status: "success", message: "Status updated." };
   }
 
@@ -95,7 +104,7 @@ export async function setGameStatusAction(
       return { status: "error", message: friendlyLibraryError() };
     }
     if (retried.length > 0) {
-      revalidateLibraryPaths(gameSlug);
+      revalidateLibraryPaths(gameSlug, user.id);
       return { status: "success", message: "Status updated." };
     }
     return { status: "error", message: friendlyLibraryError() };
@@ -131,7 +140,7 @@ export async function clearRatingAction(
     return { status: "error", message: friendlyLibraryError() };
   }
 
-  revalidateLibraryPaths(parsed.data.gameSlug);
+  revalidateLibraryPaths(parsed.data.gameSlug, user.id);
   return { status: "success", message: "Rating cleared." };
 }
 
@@ -180,7 +189,7 @@ export async function rateGameAction(
     };
   }
 
-  revalidateLibraryPaths(parsed.data.gameSlug);
+  revalidateLibraryPaths(parsed.data.gameSlug, user.id);
   return { status: "success", message: "Rating saved." };
 }
 
@@ -215,6 +224,6 @@ export async function removeFromLibraryAction(
     return { status: "error", message: friendlyLibraryError() };
   }
 
-  revalidateLibraryPaths(parsed.data.gameSlug);
+  revalidateLibraryPaths(parsed.data.gameSlug, user.id);
   return { status: "success", message: "Removed from library." };
 }

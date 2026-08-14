@@ -50,6 +50,9 @@ export async function SiteHeader() {
                   <LinkButton variant="ghost" size="sm" href="/home">
                     Home
                   </LinkButton>
+                  <LinkButton variant="ghost" size="sm" href="/recommendations">
+                    For You
+                  </LinkButton>
                   <LinkButton variant="ghost" size="sm" href="/library">
                     Library
                   </LinkButton>

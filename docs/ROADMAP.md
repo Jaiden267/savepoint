@@ -40,21 +40,25 @@ fixed — do not renumber later stages when adding work to an earlier one.
       sequence. Left as a placeholder line rather than deleted, so this
       document's history stays honest about the renumbering-avoidance rule
       above; Prompts 7 and 8 keep their original numbers.
-- [ ] **Prompt 7 — Pinecone**: index bootstrap (`llama-text-embed-v2`,
+- [x] **Prompt 7 — Pinecone**: index bootstrap (`llama-text-embed-v2`,
       namespace `games`), on-demand upsert via `game_vector_sync`, semantic
       search, recommendations + reasons, `recommendation_feedback`. Replaces
-      the placeholder in `src/lib/pinecone/`. **Semantic search half is
-      complete and live-verified**: the `savepoint-games` index is
+      the placeholder in `src/lib/pinecone/`. Semantic search half is
+      complete and live-verified: the `savepoint-games` index is
       bootstrapped (integrated embedding, `llama-text-embed-v2`, namespace
       `games`, deletion protection enabled), the concurrency-safe
       on-demand + backfillable sync pipeline is live, a bounded 5-game
       backfill and the three-query smoke test both ran successfully against
       the real index with every hit resolving to a genuine Supabase `games`
       row, and `/search` has a working semantic mode with lexical fallback.
-      See [PINECONE.md](./PINECONE.md) and
-      [PROJECT_STATE.md](./PROJECT_STATE.md). **Recommendations and
-      reasons, and `recommendation_feedback`, are not started** — left for
-      a later pass, hence this line stays unchecked.
+      **Recommendations + reasons and `recommendation_feedback` shipped in
+      Prompt 9**: `/recommendations` ("For You"), blended Pinecone-relevance + weighted-taste-signal ranking, deterministic non-LLM reasons, three
+      honestly-labeled cold-start modes, working Helpful/Not-interested/
+      Already-played feedback (Helpful genuinely feeds back into ranking),
+      hardened click/impression telemetry, and cache invalidation on
+      rate/status/review/feedback changes. See [PINECONE.md](./PINECONE.md),
+      [RECOMMENDATIONS.md](./RECOMMENDATIONS.md), and
+      [PROJECT_STATE.md](./PROJECT_STATE.md).
 - [ ] **Prompt 7C — broad IGDB catalogue semantic indexing**: expands
       Prompt 7's semantic search from cached-only to a curated ~25–29K-game
       IGDB catalogue slice, without bulk-populating Supabase. **Gate A1/A2

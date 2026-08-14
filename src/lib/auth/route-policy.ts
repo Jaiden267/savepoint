@@ -34,6 +34,7 @@ const REQUIRES_AUTH_PATHS = new Set([
   "/diary",
   "/home",
   "/lists/new",
+  "/recommendations",
 ]);
 
 /** Subset of REQUIRES_AUTH_PATHS that additionally require onboarding to be done. */
@@ -43,6 +44,7 @@ const REQUIRES_COMPLETED_PROFILE_PATHS = new Set([
   "/diary",
   "/home",
   "/lists/new",
+  "/recommendations",
 ]);
 
 /**

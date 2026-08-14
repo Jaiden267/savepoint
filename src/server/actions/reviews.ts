@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth/require-user";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logActionError } from "@/server/actions/log-action-error";
+import { invalidateCacheByPrefix } from "@/lib/igdb/search-cache";
 import {
   createReviewSchema,
   updateReviewSchema,
@@ -88,6 +89,10 @@ export async function createReviewAction(
   }
 
   revalidatePath(`/games/${parsed.data.gameSlug}`);
+  // A review's rating is a real preference signal — reflect it on this
+  // user's very next /recommendations request rather than waiting out
+  // the cache's own short TTL (see docs/RECOMMENDATIONS.md).
+  invalidateCacheByPrefix(`recommendations:${user.id}:`);
   return { status: "success", message: "Review published." };
 }
 

@@ -4,9 +4,10 @@ Prompt 7's scope: a real Pinecone integrated-embedding index for `games`, an
 idempotent on-demand + backfillable sync pipeline from `games` → Pinecone,
 and a semantic search mode on `/search`. **Recommendations and reasons, and
 `recommendation_feedback`** — also listed under the Prompt 7 roadmap line —
-are explicitly out of scope for this pass**, deferred to a later prompt. See
-[ROADMAP.md](./ROADMAP.md) and [PROJECT_STATE.md](./PROJECT_STATE.md) for
-the exact completion status.
+shipped in Prompt 9, built directly on top of this index and its sync
+pipeline; see [RECOMMENDATIONS.md](./RECOMMENDATIONS.md) for that feature's
+own architecture. See [ROADMAP.md](./ROADMAP.md) and
+[PROJECT_STATE.md](./PROJECT_STATE.md) for the exact completion status.
 
 ## Coverage: cached games, plus (as of Prompt 7C's Gate A2) infrastructure for a broad catalogue slice not yet turned on
 
