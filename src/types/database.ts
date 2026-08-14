@@ -665,22 +665,25 @@ export type Database = {
         Row: {
           created_at: string;
           event_type: string;
-          game_id: string;
+          game_id: string | null;
           id: string;
+          igdb_id: number;
           user_id: string;
         };
         Insert: {
           created_at?: string;
           event_type: string;
-          game_id: string;
+          game_id?: string | null;
           id?: string;
+          igdb_id: number;
           user_id?: string;
         };
         Update: {
           created_at?: string;
           event_type?: string;
-          game_id?: string;
+          game_id?: string | null;
           id?: string;
+          igdb_id?: number;
           user_id?: string;
         };
         Relationships: [
