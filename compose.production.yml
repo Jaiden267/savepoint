@@ -1,0 +1,55 @@
+# Production deployment on ZimaOS — LAN-host architecture. The container's
+# port 3000 is published directly to the ZimaOS host's port 3000
+# (http://192.168.1.210:3000), and the existing, separately-managed
+# Cloudflare Tunnel is pointed at that host:port from its own dashboard.
+# See docs/DEPLOYMENT.md for the full runbook.
+#
+# This file does not create, join, or reference any Docker network for
+# cloudflared — cloudflared is untouched by this deployment.
+#
+# Deliberately NOT run/deployed by this change — this file is created for
+# review. Deployment is a separate, explicit step.
+
+services:
+  savepoint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* values only — these are baked into the client
+        # bundle at build time and are not secrets (Supabase's publishable
+        # key is safe for the browser; access is still gated by RLS).
+        # Sourced from the same runtime env file via
+        # `docker compose --env-file /DATA/AppData/savepoint/.env.server`
+        # (see docs/DEPLOYMENT.md) — no separate build-time .env file.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+        NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: ${NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL}
+    image: savepoint:latest
+    container_name: savepoint
+    restart: unless-stopped
+    # Server-only secrets (SUPABASE_SECRET_KEY, IGDB_*, PINECONE_API_KEY,
+    # etc.) are supplied exclusively at runtime via this file — never as
+    # build args, never baked into the image. See docs/DEPLOYMENT.md for
+    # the full variable contract (names only, no values).
+    env_file:
+      - /DATA/AppData/savepoint/.env.server
+    # Published directly to the ZimaOS host — this is the LAN-host
+    # architecture, not a private Docker network. The app is reachable at
+    # http://192.168.1.210:3000 on the LAN, and that's the origin the
+    # existing Cloudflare Tunnel is pointed at from its own dashboard.
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
