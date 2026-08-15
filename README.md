@@ -1,6 +1,6 @@
 # Savepoint
 
-A Letterboxd-style social platform for video games: track your backlog, rate
+A social platform for video games: track your backlog, rate
 and review games, keep a play diary, follow friends, and get semantic search +
 recommendations that explain themselves.
 
